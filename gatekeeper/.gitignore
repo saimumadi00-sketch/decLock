@@ -1,0 +1,5 @@
+build/
+dist/
+installer/
+__pycache__/
+.pytest_cache/
