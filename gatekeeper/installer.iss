@@ -21,15 +21,22 @@ Source: "dist\gatekeeper\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversi
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "docs\LIMITATIONS.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 
+[Tasks]
+Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Shortcuts:"
+
 [Icons]
-; Start the guard at logon for every user. --service marks this as the installed copy,
+; The desktop app is also the guard. Start it minimized at logon for every user (protection
+; runs while the window sits in the taskbar). --service marks this as the installed copy,
 ; which makes dev mode impossible.
-Name: "{commonstartup}\{#AppName}"; Filename: "{app}\gatekeeperw.exe"; Parameters: "--service run"
+Name: "{commonstartup}\{#AppName}"; Filename: "{app}\gatekeeperw.exe"; Parameters: "--service gui --minimized"
+Name: "{group}\{#AppName}"; Filename: "{app}\gatekeeperw.exe"; Parameters: "--service gui"
+Name: "{commondesktop}\{#AppName}"; Filename: "{app}\gatekeeperw.exe"; Parameters: "--service gui"; Tasks: desktopicon
 Name: "{group}\{#AppName} command prompt"; Filename: "{cmd}"; Parameters: "/k ""cd /d ""{app}"" && gatekeeper.exe --help"""
 
 [Run]
-Filename: "{app}\gatekeeper.exe"; Parameters: "init"; Description: "Set your Gatekeeper password now"; \
-  Flags: postinstall runasoriginaluser skipifsilent
+; First launch shows the "choose a password" screen inside the app.
+Filename: "{app}\gatekeeperw.exe"; Parameters: "--service gui"; Description: "Open Gatekeeper now"; \
+  Flags: postinstall nowait runasoriginaluser skipifsilent
 
 [UninstallRun]
 ; Stop the guard, un-freeze anything it left suspended, and undo the USB block so the

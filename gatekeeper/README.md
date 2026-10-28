@@ -7,6 +7,39 @@ block new USB storage devices and lock the workstation when idle. No network acc
 **Read [docs/LIMITATIONS.md](docs/LIMITATIONS.md) first.** Gatekeeper deters casual access; it is not
 protection against an administrator, Safe Mode, or booting from other media.
 
+## Desktop app
+
+```
+python -m gatekeeper --dev gui      # try it safely: nothing is killed, blocked or locked
+python -m gatekeeper gui            # the real thing
+```
+
+The first launch asks you to choose a password. After logging in you get a sidebar with:
+
+| Page | What you can do (no commands needed) |
+|---|---|
+| Dashboard | Protection status, 7-day activity chart, recent events, pause/resume protection, verify the log, lock Windows |
+| Locked apps | Add by name, browse for an `.exe`, or pick from running programs; remove with one click |
+| USB and idle lock | Block or allow USB storage, set the idle-lock minutes, lock Windows now |
+| Face unlock | Enroll with a live camera preview, test the score, adjust strictness and timeout, delete face data |
+| Activity log | Filter by event, time range or text; export CSV; verify the chain; remove old entries; reset the chain |
+| Settings | Change password, dashboard auto-lock, log retention, open the data folder, release frozen apps |
+
+How it behaves:
+
+- **The guard and the dashboard are one program.** Locked apps stay protected whether or not you are logged in
+  to the window; the password only gates *managing* Gatekeeper.
+- **The X button minimizes and locks the window.** Protection keeps running. To really stop Gatekeeper use
+  **Quit Gatekeeper** (needs your password). Pausing protection and deleting face data also ask for it.
+- **The window locks itself** after 5 idle minutes (change it in Settings).
+- **USB changes need Administrator.** If Gatekeeper is not elevated it offers to restart itself as Administrator
+  (UAC prompt). Note: elevating with a *different* Windows account would use that account's data folder, so
+  do this from an account that is an administrator itself.
+- **One copy only.** Starting it twice, or running `gatekeeper run` while the app is open, is refused.
+- The installed copy starts minimized at logon (`gatekeeperw.exe --service gui --minimized`).
+
+The command-line tool still works and shares the same data, so you can mix both.
+
 ## Quick start (development, safe)
 
 ```

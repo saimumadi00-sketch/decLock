@@ -5,6 +5,7 @@ import sys
 from . import auth
 from .app import open_context, run_guard
 from .config import MIN_PASSWORD_LEN, PROTECTED_PROCESSES
+from .dashdata import SingleInstance
 from .devmode import DevModeRefused, resolve_dev_mode
 from .idle import IdleLocker
 from .matcher import THRESHOLD_RANGE, face_unlock_enabled, get_threshold, get_timeout
@@ -234,12 +235,46 @@ def cmd_run(ctx, args) -> int:
     if not ctx.dev and not ctx.db.list_apps():
         print("No locked apps configured; nothing to guard.")
         return 1
-    run_guard(ctx)
+    lock = SingleInstance(ctx.directory)
+    if not lock.acquire():
+        print("Gatekeeper is already running (the desktop app or another guard).")
+        return 1
+    try:
+        run_guard(ctx)
+    finally:
+        lock.release()
+    return 0
+
+
+def cmd_gui(ctx, args) -> int:
+    """The desktop app: dashboard + guard in one process."""
+    from .dashboard import run_dashboard
+    lock = SingleInstance(ctx.directory)
+    # An elevated relaunch starts while the old copy is still shutting down, so wait a moment.
+    if not lock.acquire(wait=6):
+        message = "Gatekeeper is already running. Look for it in your taskbar."
+        print(message)
+        try:  # the windowed build has no console, so say it in a dialog too
+            import tkinter as tk
+            from tkinter import messagebox
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showinfo("Gatekeeper", message)
+            root.destroy()
+        except Exception:
+            pass
+        return 1
+    relaunch = ((["--dev"] if ctx.dev else []) + (["--service"] if args.service else [])
+                + ["--data-dir", str(ctx.directory), "gui"])
+    try:
+        run_dashboard(ctx, minimized=args.minimized, relaunch_args=relaunch)
+    finally:
+        lock.release()
     return 0
 
 
 COMMANDS = {"init": cmd_init, "add": cmd_add, "remove": cmd_remove, "list": cmd_list,
-            "status": cmd_status, "verify-log": cmd_verify_log, "run": cmd_run,
+            "status": cmd_status, "verify-log": cmd_verify_log, "run": cmd_run, "gui": cmd_gui,
             "usb": cmd_usb, "idle-lock": cmd_idle_lock, "lock-now": cmd_lock_now,
             "face": cmd_face, "log": cmd_log, "release": cmd_release}
 
@@ -268,6 +303,8 @@ def main(argv=None) -> int:
             p.add_argument("value", nargs="?", help="file for export, days for retention")
         elif name == "idle-lock":
             p.add_argument("minutes", type=float, help="idle minutes before locking; 0 turns it off")
+        elif name == "gui":
+            p.add_argument("--minimized", action="store_true", help="start minimized (used at logon)")
     args = parser.parse_args(argv)
     try:
         dev = resolve_dev_mode(args.dev, args.service)
