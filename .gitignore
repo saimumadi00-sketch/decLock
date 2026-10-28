@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.env
+
+# Build output
+build/
+dist/
+installer/
+
+# Local Gatekeeper data (password hash, face data, audit log)
+*.db
+*.sqlite
+*.sqlite3
+audit-before-reset.csv
+Gatekeeper/
+Gatekeeper-dev/
+
+# Claude Code local settings
+.claude/settings.local.json
