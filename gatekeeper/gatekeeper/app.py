@@ -1,19 +1,11 @@
 import logging
-import queue
-import tkinter as tk
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import auth
 from .audit import AuditLog
 from .config import data_dir, setup_logging
 from .crypto import KeyStore
 from .db import Database
-from .guard import Guard
-from .idle import IdleLocker
-from .matcher import build_face_unlock
-from .ui import UnlockPrompt
-from .usb import UsbPolicy, UsbWatcher
 
 log = logging.getLogger("gatekeeper.app")
 
@@ -56,62 +48,17 @@ def startup_checks(ctx: Context, root) -> None:
 
 
 def run_guard(ctx: Context) -> None:
+    """Headless guard (no dashboard): the unlock prompt is the only window."""
+    import tkinter as tk
+    from .runtime import GuardRuntime
     root = tk.Tk()
     root.withdraw()
-    events: "queue.Queue[str]" = queue.Queue()
-    guard = Guard(ctx, events.put)
-    state = {"busy": False}
-    engines = []
-
-    def get_engine():
-        if not engines:  # load the models once, on first use
-            from .faces import FaceEngine
-            engines.append(FaceEngine())
-        return engines[0]
-
-    def show_next() -> None:
-        if state["busy"] or events.empty():
-            return
-        name = events.get()
-        state["busy"] = True
-
-        def done(allowed: bool) -> None:
-            state["busy"] = False
-            guard.resolve(name, allowed)
-
-        def face_result(face_state: str, score) -> None:
-            shown = "n/a" if score is None else f"{score:.2f}"
-            ctx.audit.record({"matched": "face_unlock", "failed": "face_failed"}.get(face_state, "face_unavailable"),
-                             f"{name} best_score={shown}")
-
-        UnlockPrompt(
-            root, name, lambda pw: auth.check_password(ctx.db, pw, ctx.audit), done,
-            on_failure=lambda: ctx.audit.record("bad_password", name),
-            lockout=lambda: auth.lockout_remaining(ctx.db),
-            face=build_face_unlock(ctx, get_engine), on_face_result=face_result)
-
-    def pump() -> None:
-        show_next()
-        root.after(200, pump)
-
-    startup_checks(ctx, root)
-    ctx.audit.record("guard_start", "dev" if ctx.dev else "enforcing")
-    log.info("Guard running (%s). Ctrl+C to stop.", "DEV: log only" if ctx.dev else "enforcing")
-    guard.start()
-    usb_watcher = UsbWatcher(ctx, UsbPolicy(ctx))
-    usb_watcher.start()
-    idle_minutes = float(ctx.db.get_setting("idle_lock_minutes", 0))
-    idle_locker = IdleLocker(ctx, idle_minutes) if idle_minutes > 0 else None
-    if idle_locker:
-        idle_locker.start()
-    root.after(200, pump)
+    runtime = GuardRuntime(ctx, root)
+    runtime.start()
+    log.info("Ctrl+C to stop.")
     try:
         root.mainloop()
     except KeyboardInterrupt:
         pass
     finally:
-        usb_watcher.stop()
-        if idle_locker:
-            idle_locker.stop()
-        guard.stop()
-        ctx.audit.record("guard_stop")
+        runtime.stop()
