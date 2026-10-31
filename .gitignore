@@ -12,12 +12,14 @@ dist/
 installer/
 
 # Local Gatekeeper data (password hash, face data, audit log)
+# The real data folder lives in %APPDATA%\Gatekeeper, so only stray copies are listed here.
+# Do NOT add "Gatekeeper/": git on Windows is case-insensitive, and that rule would also match
+# the gatekeeper/ source folder and silently ignore every new module added to it.
 *.db
 *.sqlite
 *.sqlite3
 audit-before-reset.csv
-Gatekeeper/
-Gatekeeper-dev/
+/Gatekeeper-dev/
 
 # Claude Code local settings
 .claude/settings.local.json

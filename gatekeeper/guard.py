@@ -1,0 +1,195 @@
+"""Process guard: suspend newly started locked apps until the password is entered.
+
+Flow per locked process: detect -> suspend -> ask UI for password -> resume
+(and grant that app name a time window) or kill the process tree.
+
+Windows cannot reliably stop a process from *starting* without kernel-level
+help, so this is detect-and-suspend: there is a window of a few hundred
+milliseconds before the first scan sees the process.
+
+A process counts as a locked app if its name is locked, or if its program file really is a
+locked app that was renamed or copied (see identity.py).
+"""
+
+import logging
+import threading
+import time
+from typing import Callable
+
+import psutil
+
+from . import schedule
+from .identity import Identifier
+
+log = logging.getLogger("gatekeeper.guard")
+
+
+class Guard:
+    def __init__(self, ctx, on_locked: Callable[[str], None], poll: float = 0.5, grant_seconds: float = 600):
+        self.ctx = ctx
+        self.on_locked = on_locked          # called (from the guard thread) with the app name to prompt for
+        self.poll = poll                    # seconds between process scans
+        self.grant_seconds = grant_seconds  # after an unlock, new copies of that app start freely this long
+        self._seen = set()  # (pid, create_time) already handled; create_time stops PID reuse fooling us
+        self._names = {}    # (pid, create_time) -> the locked app it really is (or None), worked out once
+        self._apps = None   # the locked-app list _names was computed against
+        self.identity = Identifier(ctx.db)
+        self._pending = {}   # app name -> [psutil.Process]
+        self._granted = {}   # app name -> monotonic expiry
+        self._lock = threading.RLock()
+        self._stop = threading.Event()
+        self._thread = None
+
+    # -- scanning -----------------------------------------------------------
+    def scan(self) -> None:
+        """One pass over all processes: suspend each new instance of a currently-locked app."""
+        apps = frozenset(self.ctx.db.list_apps())
+        if apps != self._apps:  # an app was locked or unlocked: re-check every process against the new list
+            self._apps, self._names = apps, {}
+        locked = schedule.locked_now(self.ctx.db)  # apps whose lock schedule is active right now
+        alive, by_file = set(), []
+        for proc in psutil.process_iter(["name", "create_time"]):
+            try:
+                key = (proc.pid, proc.info["create_time"])
+                alive.add(key)
+                real = (proc.info["name"] or "").lower()
+                if real in apps:
+                    self._check(key, real, proc, locked)  # name match: cheap, so handle it first
+                else:
+                    by_file.append((key, real, proc))
+            except psutil.Error:
+                continue
+        # Second pass: the rest may need their program file read and hashed (cached after the first time),
+        # so a slow file never delays freezing an app whose name is locked.
+        for key, real, proc in by_file:
+            try:
+                self._check(key, real, proc, locked)
+            except psutil.Error:
+                continue
+        self._seen &= alive  # forget processes that have exited
+        self._names = {k: v for k, v in self._names.items() if k in alive}
+
+    def _check(self, key, real: str, proc: psutil.Process, locked) -> None:
+        """Freeze `proc` if it is (a copy of) a locked app we haven't handled yet."""
+        app = self._resolve(key, real, proc)
+        if app in locked and key not in self._seen:
+            self._seen.add(key)
+            self._handle(app, proc, real)
+
+    def _resolve(self, key, real: str, proc: psutil.Process):
+        """Which locked app this process is: by name, else by its program file. Cached per process."""
+        if key not in self._names:
+            try:
+                exe = proc.exe()
+            except psutil.Error:  # e.g. an elevated process we may not inspect
+                exe = None
+            if real in self._apps:
+                self._names[key] = real
+                self.identity.learn(real, exe)  # remember the real app's fingerprint for renamed copies
+            else:
+                self._names[key] = self.identity.match(exe, self._apps)
+        return self._names[key]
+
+    def _handle(self, name: str, proc: psutil.Process, real: str = "") -> None:
+        # `name` is the locked app; `real` the process's actual file name, which differs for a renamed copy.
+        copy = f" (renamed copy: {real})" if real and real != name else ""
+        with self._lock:
+            if self._granted.get(name, 0) > time.monotonic():
+                log.debug("%s pid %d allowed by active grant", name, proc.pid)
+                return
+            if self.ctx.dev:
+                log.info("[DEV] would suspend and prompt for %s (pid %d); no action taken", name, proc.pid)
+                return
+            try:
+                proc.suspend()
+            except psutil.Error as exc:
+                self.ctx.audit.record("enforce_failed", f"{name} pid={proc.pid}{copy} cannot suspend: {exc}")
+                return
+            queue = self._pending.setdefault(name, [])
+            first = not queue  # only the first frozen instance opens a prompt; the rest wait with it
+            queue.append(proc)
+        self.ctx.audit.record("blocked", f"{name} pid={proc.pid}{copy}")
+        if first:
+            self.on_locked(name)
+
+    # -- decisions ----------------------------------------------------------
+    def resolve(self, name: str, allowed: bool) -> None:
+        """The prompt's answer: resume every waiting instance of `name`, or kill them."""
+        with self._lock:
+            procs = self._pending.pop(name, [])
+            if allowed:
+                self._granted[name] = time.monotonic() + self.grant_seconds
+        for proc in procs:
+            try:
+                if allowed:
+                    proc.resume()
+                else:
+                    self._kill_tree(proc)
+            except psutil.Error as exc:
+                log.warning("could not %s pid %d: %s", "resume" if allowed else "kill", proc.pid, exc)
+        self.ctx.audit.record("unlocked" if allowed else "denied", f"{name} ({len(procs)} process(es))")
+
+    @staticmethod
+    def _kill_tree(proc: psutil.Process) -> None:
+        """Kill a process and all its children (browsers start many helper processes)."""
+        victims = proc.children(recursive=True) + [proc]
+        for p in victims:
+            try:
+                p.kill()
+            except psutil.NoSuchProcess:
+                pass
+        psutil.wait_procs(victims, timeout=3)
+
+    def release_all(self) -> None:
+        """Fail open on shutdown: never leave processes frozen."""
+        with self._lock:
+            procs = [p for group in self._pending.values() for p in group]
+            self._pending.clear()
+        for proc in procs:
+            try:
+                proc.resume()
+            except psutil.Error:
+                pass
+        if procs:
+            self.ctx.audit.record("released_on_exit", f"{len(procs)} process(es)")
+
+    # -- thread -------------------------------------------------------------
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._loop, name="guard", daemon=True)
+        self._thread.start()
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self.scan()
+            except Exception:
+                log.exception("scan failed")
+            self._stop.wait(self.poll)
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=3)
+        self.release_all()
+
+
+def release_suspended(ctx) -> int:
+    """Recovery: resume any locked-app process left frozen (e.g. the guard was force-killed
+    while a password prompt was open). Callers decide whether a password is needed: the CLI asks
+    for one while a guard is running, because then a frozen app is waiting at its prompt."""
+    locked = set(ctx.db.list_apps())
+    identity = Identifier(ctx.db)
+    resumed = 0
+    for proc in psutil.process_iter(["name", "status"]):
+        try:
+            if proc.info["status"] != psutil.STATUS_STOPPED:
+                continue
+            name = (proc.info["name"] or "").lower()
+            if name in locked or identity.match(proc.exe(), locked):
+                proc.resume()
+                resumed += 1
+        except psutil.Error:
+            continue
+    if resumed:
+        ctx.audit.record("released_manually", f"{resumed} process(es)")
+    return resumed
