@@ -23,7 +23,7 @@ The first launch asks you to choose a password. After logging in you get a sideb
 | Dashboard | Status tiles (with a "Problems (24h)" tile that opens the log filtered to problems), a 7-day chart you can switch between unlocked/denied, blocked starts and most-attempted apps (click a day to open its log), first-run checklist, pause/resume, verify the log, lock Windows |
 | Locked apps | Add by name, browse for an `.exe`, pick from running programs, or add a preset (browsers, games, chat, office). Shows last attempt and denied count; set a per-app lock schedule (e.g. 22:00-06:00) |
 | USB and idle lock | Block or allow USB storage, set the idle-lock minutes, lock Windows now |
-| Face unlock | Enroll with a live camera preview, test the score, adjust strictness and timeout, delete face data |
+| Face unlock | Enroll with a live camera preview, run the full unlock check as a test (with live match, real-face and head-pose numbers), adjust strictness and timeout, delete face data |
 | Activity log | Filter by event, severity, time range, day or text; export CSV; verify the chain; remove old entries; reset the chain |
 | Settings | Change password, light/dark theme, optional 60-second password memory, dashboard auto-lock, log retention, open the data folder, release frozen apps |
 
@@ -70,8 +70,8 @@ the environment variable in the installed build. Drop `--dev` to enforce for rea
 | `usb block\|allow\|status` | USB storage policy (**needs an elevated prompt**) | block/allow |
 | `idle-lock <minutes>` / `lock-now` | Windows lock after N idle minutes (0 = off) | idle-lock |
 | `face enroll\|clear\|status` | face samples (encrypted) | enroll/clear |
-| `face test` | live score preview for tuning | no |
-| `face threshold <0.2-0.9>` / `timeout <2-30>` / `enable` / `disable` | tune face unlock | yes |
+| `face test` | live match / real-face / head-pose preview for tuning | no |
+| `face threshold <0.25-0.8>` / `timeout <8-45>` / `enable` / `disable` | tune face unlock | yes |
 | `log export <file.csv>` / `retention <days>` / `prune` / `reset` | audit log (default retention 90 days, 0 = forever) | yes |
 | `verify-log` / `status` | check the audit chain | no |
 | `release` | un-freeze any locked app left suspended | only while a guard is running |
@@ -98,8 +98,12 @@ Note: "service" here means the installed autostart mode, not a Windows Service. 
 
 ## Uninstall
 
-Settings > Apps > Gatekeeper > Uninstall (admin required; it does not ask for the Gatekeeper
-password). The uninstaller stops the guard, resumes any frozen app, re-enables USB storage, and asks
+Settings > Apps > Gatekeeper > Uninstall (admin required). Before removing anything, the uninstaller
+shows the Gatekeeper password prompt; cancelling, a wrong password (3 tries, same lockout as
+everywhere else) or the 60-second timeout stops the uninstall. Silent uninstalls (`/SILENT`) are
+checked too. If several Windows users set up Gatekeeper, any of their passwords is accepted; if no
+one set a password, no prompt is shown. Both outcomes are logged (`uninstall_allowed` /
+`uninstall_refused`). After the password is accepted, the uninstaller stops the guard, resumes any frozen app, re-enables USB storage, and asks
 whether to delete your settings and face data (`%APPDATA%\Gatekeeper`).
 
 ## Recovery
@@ -118,7 +122,13 @@ whether to delete your settings and face data (`%APPDATA%\Gatekeeper`).
 
 - **Passwords:** bcrypt (cost 12) over a SHA-256 pre-hash; minimum 8 characters.
 - **Brute force:** 5 free failures, then 30 s doubling to 15 min, persisted across restarts; while locked even the correct password is refused. Each prompt also allows only 3 tries before the app is closed.
-- **Face data:** embeddings and snapshots are Fernet-encrypted; the key is wrapped with Windows DPAPI (tied to your Windows user and this PC). Models (YuNet, SFace) are SHA-256 pinned. Face data is biometric: use `face clear` when you stop using it, and `--no-snapshots` to store vectors only.
+- **Face data:** embeddings and snapshots are Fernet-encrypted; the key is wrapped with Windows DPAPI (tied to your Windows user and this PC). Models are SHA-256 pinned (see `models/README.md` for sources and licences). Face data is biometric: use `face clear` when you stop using it, and `--no-snapshots` to store vectors only.
+- **Face unlock:** every attempt must pass three checks at once.
+  1. *Identity:* SCRFD finds the face, which is aligned and turned into an ArcFace vector and compared with the enrolled samples (default strictness 0.40).
+  2. *Real face:* MiniFASNet (two models, averaged) checks every frame for photos, prints and screens.
+  3. *Challenge:* two head movements (left / right / up / down) in a random order, chosen with the OS's secure random generator. They are measured from the face's own landmarks, so tilting a photo can't fake them, and moving the wrong way fails the attempt. The same face must stay in view throughout and must match again at the end.
+
+  Enrolment only accepts real, front-facing samples. Samples made by the old YuNet/SFace models are not comparable: face unlock stays off until you enroll again.
 - **Audit log:** SQLite, hash-chained, with a head seal (deleting it is detected too); verified at every start and every few seconds while the dashboard is open. Tampering raises a warning but never stops protection. CSV export neutralises spreadsheet formulas.
 - **Renamed copies:** a locked app is recognised even when renamed or copied, by the original name in its version information and by a SHA-256 fingerprint of the file (learned when you lock it by browsing to the `.exe`, and whenever the real app runs). Programs in the Windows folder are skipped.
 - **Safety:** protected system processes cannot be locked; shutting the guard down resumes frozen apps; a force-kill is recoverable with `release`.
@@ -131,11 +141,12 @@ gatekeeper/   package
   guard, identity, runtime, schedule   process watcher, renamed-copy detection, prompt queue, lock windows
   ui, face_anim, blur                  the unlock overlay, its Face ID animation, the blurred backdrop
   auth, audit, crypto, db              passwords and lockout, hash-chained log, DPAPI key, SQLite
-  faces, enroll, matcher, face_store   face detection, enrolment, live matching, encrypted samples
+  faces, liveness, matcher             face models, the anti-spoof challenge, the live attempt
+  enroll, face_store                   enrolment, encrypted samples
   usb, idle, winapi                    USB storage policy, idle lock, Windows API calls
   dashboard, gui_pages, gui_widgets,   the desktop app, its pages, shared widgets,
   dashdata, tray                       its Tk-free logic, and the optional tray icon
-models/       YuNet + SFace ONNX models (hash-pinned)
+models/       SCRFD, ArcFace and MiniFASNet ONNX models (hash-pinned; see models/README.md)
 tests/        pytest suite
 installer.iss, gatekeeper.spec, build.ps1
 ```

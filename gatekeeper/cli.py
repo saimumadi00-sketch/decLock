@@ -14,7 +14,8 @@ from .config import MIN_PASSWORD_LEN
 from .dashdata import SingleInstance, lock_app, normalize_exe, validate_app
 from .devmode import DevModeRefused, resolve_dev_mode
 from .idle import IdleLocker
-from .matcher import THRESHOLD_RANGE, face_unlock_enabled, get_threshold, get_timeout
+from .matcher import (THRESHOLD_RANGE, TIMEOUT_RANGE, WEAK_THRESHOLD, enrolment_current, face_unlock_enabled,
+                      get_threshold, get_timeout)
 from .usb import UsbPolicy
 
 
@@ -108,7 +109,8 @@ def cmd_face(ctx, args) -> int:
     store = FaceStore(ctx.db, ctx.keys)
     # -- read-only actions ------------------------------------------------------------------
     if args.action == "status":
-        print(f"Face samples enrolled: {store.count()}")
+        print(f"Face samples enrolled: {store.count()}"
+              + ("" if not store.count() or enrolment_current(ctx.db) else "  (made by older models: re-enrol)"))
         print(f"Face unlock:           {'on' if face_unlock_enabled(ctx.db) else 'off'}")
         print(f"Threshold:             {get_threshold(ctx.db):.2f} (higher = stricter)")
         print(f"Timeout:               {get_timeout(ctx.db):g}s, then falls back to the password")
@@ -131,15 +133,15 @@ def cmd_face(ctx, args) -> int:
     if not _require_auth(ctx):
         return 1
     if args.action in ("threshold", "timeout"):
-        low, high = THRESHOLD_RANGE if args.action == "threshold" else (2, 30)
+        low, high = THRESHOLD_RANGE if args.action == "threshold" else TIMEOUT_RANGE
         if args.value is None or not low <= args.value <= high:
             print(f"Give a value between {low} and {high}, e.g. face {args.action} {(low + high) / 2:g}")
             return 1
         ctx.db.set_setting(f"face_{args.action}", args.value)
         ctx.audit.record(f"face_{args.action}_set", str(args.value))
         print(f"Face {args.action} set to {args.value:g}.")
-        if args.action == "threshold" and args.value < 0.363:
-            print("Warning: below SFace's published 0.363 threshold; false accepts become likely.")
+        if args.action == "threshold" and args.value < WEAK_THRESHOLD:
+            print(f"Warning: below {WEAK_THRESHOLD}; other people's faces start to match.")
         return 0
     if args.action in ("enable", "disable"):
         ctx.db.set_setting("face_unlock", "1" if args.action == "enable" else "0")
@@ -298,6 +300,34 @@ def cmd_gui(ctx, args) -> int:
     return 0
 
 
+def _ask_uninstall(gate) -> bool:
+    """The unlock-style password prompt, worded for uninstalling. Denies on cancel or timeout."""
+    import tkinter as tk
+    from .ui import FADE_OUT_MS, UnlockPrompt
+    root = tk.Tk()
+    root.withdraw()
+    result = []
+
+    def done(allowed: bool) -> None:
+        result.append(allowed)
+        root.after(FADE_OUT_MS + 100, root.quit)  # let the prompt fade out first
+
+    UnlockPrompt(root, "Gatekeeper", gate.verify, done, max_attempts=3,
+                 on_failure=lambda: gate.record("bad_password", "uninstaller"), lockout=gate.lockout,
+                 title="Uninstall Gatekeeper?", prompt="Enter the Gatekeeper password to uninstall it.",
+                 confirm_text="Uninstall")
+    root.mainloop()
+    root.destroy()
+    return bool(result and result[0])
+
+
+def confirm_uninstall_main() -> int:
+    """Run by the uninstaller before it removes anything. Exit code 0 = go ahead, 1 = refused.
+    Handled before open_context, so it never creates a data folder in the admin's profile."""
+    from .uninstall import confirm_uninstall
+    return 0 if confirm_uninstall(_ask_uninstall) else 1
+
+
 COMMANDS = {"init": cmd_init, "add": cmd_add, "remove": cmd_remove, "list": cmd_list,
             "status": cmd_status, "verify-log": cmd_verify_log, "run": cmd_run, "gui": cmd_gui,
             "usb": cmd_usb, "idle-lock": cmd_idle_lock, "lock-now": cmd_lock_now,
@@ -305,6 +335,9 @@ COMMANDS = {"init": cmd_init, "add": cmd_add, "remove": cmd_remove, "list": cmd_
 
 
 def main(argv=None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if "confirm-uninstall" in argv:  # hidden: only the uninstaller calls it
+        return confirm_uninstall_main()
     parser = argparse.ArgumentParser(prog="gatekeeper")
     parser.add_argument("--dev", action="store_true", help="log only; never kill, block or lock")
     parser.add_argument("--service", action="store_true", help=argparse.SUPPRESS)  # set by the installer

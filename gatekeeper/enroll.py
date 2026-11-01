@@ -36,6 +36,11 @@ class Enroller:
         face = faces[0]
         if min(face.box[2], face.box[3]) < MIN_FACE_PX:
             return "too_small"
+        from .liveness import FRONTAL_YAW, LIVE_THRESHOLD, head_pose
+        if abs(head_pose(face.kps)[0]) >= FRONTAL_YAW:
+            return "not_frontal"  # samples are taken facing the camera, like the unlock's first phase
+        if self.engine.liveness(frame, face) < LIVE_THRESHOLD:
+            return "not_live"     # never enrol a photo or a screen
         if self.clock() - self._last < self.interval:
             return "hold_still"
         embedding = self.engine.embed(frame, face)
@@ -69,6 +74,8 @@ MESSAGES = {
     "no_face": "No face found",
     "multiple_faces": "Only one person in view, please",
     "too_small": "Move closer",
+    "not_frontal": "Look straight at the camera",
+    "not_live": "Use your real face, not a photo or a screen",
     "hold_still": "Hold still...",
     "inconsistent": "Doesn't match your first sample",
     "captured": "Captured",

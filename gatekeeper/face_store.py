@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import numpy as np
 
 from .crypto import KeyStore
+from .faces import MODEL_ID
 from .db import Database
 
 
@@ -22,6 +23,11 @@ class FaceStore:
             self.db.conn.execute("DELETE FROM face_samples")
             self.db.conn.executemany(
                 "INSERT INTO face_samples(created_at,embedding,snapshot) VALUES(?,?,?)", rows)
+        if self.db.get_setting("face_model") != MODEL_ID:
+            # First enrolment with these models: an old strictness setting meant something else.
+            from .matcher import DEFAULT_THRESHOLD
+            self.db.set_setting("face_threshold", DEFAULT_THRESHOLD)
+        self.db.set_setting("face_model", MODEL_ID)  # which models made these samples
 
     def embeddings(self) -> list:
         """All enrolled face vectors, decrypted (raises if key.bin no longer matches)."""

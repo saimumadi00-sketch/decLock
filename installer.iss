@@ -1,6 +1,8 @@
 ; Inno Setup 6 script. Build the app first (build.ps1), then compile this file.
 #define AppName "Gatekeeper"
 #define AppVersion "0.1.0"
+#define AppOwner "saimumadi00-sketch"
+#define AppURL "https://github.com/saimumadi00-sketch/decLock"
 
 [Setup]
 AppId={{B7C1D3A2-5E4F-4A8B-9C61-2F0E7D9A1B34}
@@ -15,10 +17,22 @@ Compression=lzma2
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayName={#AppName}
+; Ownership and the licence agreement (the user must accept it before installing).
+AppPublisher={#AppOwner}
+AppPublisherURL={#AppURL}
+AppSupportURL={#AppURL}
+AppCopyright=Copyright (C) 2026 {#AppOwner}. All rights reserved.
+LicenseFile=LICENSE.txt
+VersionInfoCompany={#AppOwner}
+VersionInfoCopyright=Copyright (C) 2026 {#AppOwner}
+VersionInfoDescription={#AppName} Setup
+VersionInfoVersion={#AppVersion}
 
 [Files]
 Source: "dist\gatekeeper\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "THIRD_PARTY_NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "docs\LIMITATIONS.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "docs\USAGE.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 
@@ -55,6 +69,19 @@ begin
   { Upgrade case: stop a running guard so its files can be replaced. }
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM gatekeeperw.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Result := '';
+end;
+
+function InitializeUninstall(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  { Runs before anything is removed or stopped. Gatekeeper shows its password prompt and exits
+    0 only for the right password (or when no password was ever set). Fails closed: if the
+    check cannot run, nothing is uninstalled. Silent uninstalls (/SILENT) are checked too. }
+  Result := Exec(ExpandConstant('{app}\gatekeeperw.exe'), '--service confirm-uninstall', '',
+                 SW_SHOWNORMAL, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+  if not Result and not UninstallSilent then
+    MsgBox('Gatekeeper was not uninstalled: the password was not confirmed.', mbError, MB_OK);
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

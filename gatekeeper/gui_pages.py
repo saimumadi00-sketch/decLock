@@ -16,7 +16,7 @@ from . import dashdata, face_anim, schedule, winapi
 from .config import MIN_PASSWORD_LEN
 from .gui_widgets import (BAR_SERIES, FONT, P, CameraSession, center, day_at, draw_bars, draw_hbars,
                           make_card, make_dot, make_pill, password_entry, set_empty, set_pill)
-from .matcher import THRESHOLD_RANGE
+from .matcher import THRESHOLD_RANGE, TIMEOUT_RANGE, enrolment_current
 
 
 class Page(ttk.Frame):
@@ -265,7 +265,8 @@ class DashboardPage(Page):
                     P["good"] if usb == "blocked" else P["muted"]),
             "idle": ("Off" if s["idle_minutes"] == 0 else f"{s['idle_minutes']:g} min", "Windows auto-lock",
                      P["muted"] if s["idle_minutes"] == 0 else P["good"]),
-            "face": ("On" if s["face_enabled"] else "Off", f"{s['face_samples']} sample(s)",
+            "face": ("On" if s["face_enabled"] else "Off",
+                     f"{s['face_samples']} sample(s)" if s["face_current"] or not s["face_samples"] else "re-enrol needed",
                      P["good"] if s["face_enabled"] else P["muted"]),
             "fails": (str(problems), "wrong passwords, denials, ..." if problems else "all quiet",
                       P["bad"] if problems else P["good"]),
@@ -563,8 +564,9 @@ class FacePage(Page):
         self.session, self.mode, self.enroller, self._photo, self._after = None, None, None, None, None
         self.matched = False  # test mode: did the latest frame match? (set on the camera thread)
         ttk.Label(self, style="Warn.TLabel", wraplength=760, justify="left", text=(
-            "Face unlock is a convenience, not strong security. It has no liveness check yet, so a good photo or video "
-            "of you may unlock apps. Your password is the real lock.")).pack(fill="x", pady=(0, 12))
+            "Face unlock checks that the face is real (photos and screens are rejected) and asks for two random head "
+            "movements. It is still not as strong as your password: a realistic mask or a skilled deepfake could "
+            "get through.")).pack(fill="x", pady=(0, 12))
         cols = ttk.Frame(self)
         cols.pack(fill="both", expand=True)
         cols.columnconfigure(0, weight=3)
@@ -612,7 +614,7 @@ class FacePage(Page):
                   command=lambda v: self.thr_text.set(f"{float(v):.2f}  (higher = stricter)")).pack(fill="x")
         ttk.Label(body, textvariable=self.thr_text, style="CardMuted.TLabel").pack(anchor="w")
         ttk.Label(body, text="Give up after (seconds)", style="Card.TLabel").pack(anchor="w", pady=(8, 0))
-        ttk.Scale(body, from_=2, to=30, variable=self.timeout_var,
+        ttk.Scale(body, from_=TIMEOUT_RANGE[0], to=TIMEOUT_RANGE[1], variable=self.timeout_var,
                   command=lambda v: self.timeout_text.set(f"{float(v):.0f} s")).pack(fill="x")
         ttk.Label(body, textvariable=self.timeout_text, style="CardMuted.TLabel").pack(anchor="w")
         ttk.Button(body, text="Save settings", style="Accent.TButton", command=self.save).pack(fill="x", pady=(12, 4))
@@ -624,7 +626,12 @@ class FacePage(Page):
     def refresh(self) -> None:
         enabled, threshold, timeout = dashdata.face_options(self.ctx.db)
         count = dashdata.face_sample_count(self.ctx.db)
-        self.samples_info.set(f"{count} face sample(s) enrolled" if count else "No face enrolled yet")
+        if not count:
+            self.samples_info.set("No face enrolled yet")
+        elif not enrolment_current(self.ctx.db):  # made by the old YuNet/SFace models
+            self.samples_info.set("Face unlock was upgraded: enroll again to use it")
+        else:
+            self.samples_info.set(f"{count} face sample(s) enrolled")
         self.enabled_var.set(enabled)
         self.thr_var.set(threshold)
         self.timeout_var.set(timeout)
@@ -697,22 +704,33 @@ class FacePage(Page):
         if not enrolled:
             self._say("Enroll your face first.", True)
             return
+        if not enrolment_current(self.ctx.db):
+            self._say("Face unlock was upgraded. Enroll your face again first.", True)
+            return
+        from .liveness import Challenge, random_challenge
         try:
             # Uses the slider's (unsaved) value, so the user can try a strictness before saving it.
             matcher = FaceMatcher(self.app.runtime.engine(), enrolled, round(self.thr_var.get(), 2))
         except Exception as exc:
             self._say(f"Face models unavailable: {exc}", True)
             return
+        challenge = Challenge(random_challenge(), matcher.threshold)  # the same test the unlock prompt runs
 
-        def process(frame):  # camera thread
-            score = matcher.score(frame)
-            if score is None:
-                return "Need exactly one face in view", False
-            self.matched = score >= matcher.threshold
-            return f"score {score:.2f}  /  needs {matcher.threshold:.2f}   " + ("MATCH" if self.matched else "no match"), False
+        def process(frame):  # camera thread: run the full challenge and show the live numbers
+            obs = matcher.observe(frame)
+            state = challenge.feed(obs)
+            numbers = (f"match {obs.identity:.2f} (needs {matcher.threshold:.2f})   real {obs.live:.2f}   "
+                       f"yaw {obs.yaw:+.2f}   pitch {obs.pitch:.2f}" if obs.faces == 1
+                       else "Need exactly one face in view")
+            if state == "matched":
+                self.matched = True
+                return "Passed: your face matched, looked real, and followed the moves.\n" + numbers, True
+            if state == "failed":
+                return f"Failed: {challenge.reason}.\n" + numbers, True
+            return challenge.instruction + "\n" + numbers, False
 
-        self._say("Move the Strictness slider and watch the score; Test uses the slider value.")
-        self._begin(process, "test", 60)
+        self._say("Test runs the real unlock check: follow the instructions under the camera.")
+        self._begin(process, "test", 45)
 
     def _poll(self) -> None:
         """Every 60 ms on the Tk thread: show the newest frame/status and handle end conditions."""
@@ -724,15 +742,16 @@ class FacePage(Page):
             self._photo = tk.PhotoImage(data=png)  # keep a reference or Tk drops the image
             self.preview.configure(image=self._photo, text="", width=0, height=0)
         self.status_var.set(session.status)
-        if self.mode == "test":
-            wanted = face_anim.SUCCESS if self.matched else face_anim.SCANNING
-            if self.anim.state != wanted:
-                self.anim.set_state(wanted)
         if session.error:
             self.stop()
             self._say(f"Camera problem: {session.error}", True)
         elif session.done and self.mode == "enroll":
             self._finish_enroll()
+        elif session.done:  # test finished: keep its verdict on screen after the camera stops
+            verdict, passed = session.status, self.matched
+            self.stop()
+            self._say(verdict.replace("\n", "  "), not passed)
+            self.anim.set_state(face_anim.SUCCESS if passed else face_anim.FAILURE)
         elif time.monotonic() > self.deadline:
             self.stop()
             self._say("Timed out." + (" Nothing was saved." if self.mode == "enroll" else ""), True)

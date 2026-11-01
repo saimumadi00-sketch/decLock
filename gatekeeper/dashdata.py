@@ -13,7 +13,8 @@ import psutil
 
 from . import auth, schedule
 from .config import PROTECTED_PROCESSES
-from .matcher import THRESHOLD_RANGE, face_unlock_enabled, get_threshold, get_timeout
+from .matcher import (THRESHOLD_RANGE, TIMEOUT_RANGE, WEAK_THRESHOLD, enrolment_current, face_unlock_enabled,
+                      get_threshold, get_timeout)
 from .usb import UsbPolicy
 
 AUTOLOCK_KEY = "ui_autolock_minutes"   # settings key: dashboard window auto-lock
@@ -289,6 +290,7 @@ def summary(ctx) -> dict:
         "idle_minutes": float(ctx.db.get_setting("idle_lock_minutes", 0)),
         "face_enabled": face_unlock_enabled(ctx.db),
         "face_samples": face_sample_count(ctx.db),
+        "face_current": enrolment_current(ctx.db),  # False: samples from older models, re-enrol needed
         "chain_ok": ok,
         "chain_bad": bad,
         "problems24": problems_since(ctx.db, 24),
@@ -362,7 +364,7 @@ def checklist(ctx) -> list:
     return [("Choose a password", auth.has_password(ctx.db), "settings"),
             ("Lock your first app", bool(ctx.db.list_apps()), "apps"),
             ("Decide on USB storage blocking", usb_done, "usb"),
-            ("Enroll your face (optional)", face_sample_count(ctx.db) > 0, "face")]
+            ("Enroll your face (optional)", face_sample_count(ctx.db) > 0 and enrolment_current(ctx.db), "face")]
 
 
 def checklist_dismissed(db) -> bool:
@@ -411,15 +413,15 @@ def set_face_options(ctx, enabled: bool, threshold, timeout) -> str:
     """Validate and save all face settings together. Returns a warning (possibly empty)."""
     # Validate both values before saving either, so a bad timeout doesn't leave a half-saved state.
     threshold = _number(threshold, *THRESHOLD_RANGE, "Threshold")
-    timeout = _number(timeout, 2, 30, "Timeout")
+    timeout = _number(timeout, *TIMEOUT_RANGE, "Timeout")
     ctx.db.set_setting("face_threshold", threshold)
     ctx.db.set_setting("face_timeout", timeout)
     ctx.db.set_setting("face_unlock", "1" if enabled else "0")
     ctx.audit.record("face_threshold_set", str(threshold))
     ctx.audit.record("face_timeout_set", str(timeout))
     ctx.audit.record("face_unlock_enabled" if enabled else "face_unlock_disabled")
-    if threshold < 0.363:
-        return "Below SFace's published 0.363 threshold: false accepts become likely."
+    if threshold < WEAK_THRESHOLD:
+        return f"Below {WEAK_THRESHOLD}: other people's faces start to match."
     return ""
 
 

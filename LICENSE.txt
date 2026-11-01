@@ -1,0 +1,83 @@
+GATEKEEPER (decLock) - END USER LICENSE AGREEMENT
+
+Copyright (c) 2026 saimumadi00-sketch (https://github.com/saimumadi00-sketch). All rights reserved.
+
+Please read this agreement carefully. By installing, copying or using Gatekeeper ("the Software")
+you agree to these terms. If you do not agree, do not install or use the Software.
+
+
+1. OWNERSHIP
+
+The Software, including its source code, executables, installer, user interface, documentation
+and design, is owned by saimumadi00-sketch ("the Owner"), the holder of the GitHub account
+https://github.com/saimumadi00-sketch and the repository https://github.com/saimumadi00-sketch/decLock.
+The Software is protected by copyright law. It is licensed to you, not sold. All rights not
+expressly granted in this agreement are reserved by the Owner.
+
+The third-party components listed in section 6 are NOT owned by the Owner; they remain the property
+of their respective authors and are used under their own licences.
+
+
+2. LICENCE GRANT
+
+The Owner grants you a personal, non-exclusive, non-transferable, revocable licence to install and
+use the Software on computers you own or control, for personal, educational or research purposes.
+
+
+3. RESTRICTIONS
+
+You may not, without the Owner's prior written permission:
+  a) sell, rent, lease, sublicense or otherwise commercially exploit the Software;
+  b) redistribute the Software or any modified version of it;
+  c) remove or alter any copyright, ownership or licence notice;
+  d) present the Software, or any part of it, as your own work.
+
+Because of the licence of the bundled InsightFace face models (section 6), the Software may not be
+used for any commercial purpose.
+
+
+4. PRIVACY
+
+The Software works entirely offline. It does not send any data over the network. Your password is
+stored as a bcrypt hash and your face data is stored encrypted (Windows DPAPI), only on your
+computer, in %APPDATA%\Gatekeeper. Uninstalling offers to delete this data.
+
+If you enrol another person's face, you are responsible for obtaining their consent and for
+complying with any data-protection law that applies to you.
+
+
+5. NO WARRANTY AND LIMITATION OF LIABILITY
+
+The Software is a deterrent against casual access. It does not protect against an administrator,
+Safe Mode, or booting from other media (see docs\LIMITATIONS.md). Do not rely on it as your only
+security measure.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NON-INFRINGEMENT. TO THE MAXIMUM EXTENT PERMITTED BY LAW, IN NO EVENT SHALL THE OWNER BE LIABLE FOR
+ANY CLAIM, DAMAGES OR OTHER LIABILITY, INCLUDING LOSS OF DATA, LOSS OF ACCESS TO APPLICATIONS OR
+DEVICES, OR ANY INDIRECT OR CONSEQUENTIAL DAMAGES, ARISING FROM OR IN CONNECTION WITH THE SOFTWARE
+OR ITS USE.
+
+Keep your Gatekeeper password safe. There is no password recovery or backdoor.
+
+
+6. THIRD-PARTY COMPONENTS
+
+The Software includes components owned by others, each used under its own licence. They are
+listed, with their licences, in THIRD_PARTY_NOTICES.txt, installed next to this file. In particular:
+  - SCRFD and ArcFace face models (InsightFace): non-commercial research use only.
+  - MiniFASNet anti-spoofing models (minivision-ai): Apache License 2.0.
+Nothing in this agreement restricts rights you have under those licences.
+
+
+7. TERMINATION
+
+This licence ends automatically if you break any of its terms. When it ends, you must uninstall
+the Software and delete all copies.
+
+
+8. CONTACT
+
+Questions about this agreement or requests for permission:
+https://github.com/saimumadi00-sketch

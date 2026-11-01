@@ -100,11 +100,13 @@ class GuardRuntime:
 
         def face_result(face_state: str, score) -> None:  # log every face attempt with its best score
             shown = "n/a" if score is None else f"{score:.2f}"
+            why = getattr(face, "reason", "") if face_state == "failed" else ""
             ctx.audit.record({"matched": "face_unlock", "failed": "face_failed"}.get(face_state, "face_unavailable"),
-                             f"{name} best_score={shown}")
+                             f"{name} best_score={shown}" + (f" ({why})" if why else ""))
 
+        face = build_face_unlock(ctx, self.engine)  # None when face unlock is off or not enrolled
         UnlockPrompt(
             self.root, name, lambda pw: auth.check_password(ctx.db, pw, ctx.audit), done,
             on_failure=lambda: ctx.audit.record("bad_password", name),
             lockout=lambda: auth.lockout_remaining(ctx.db),
-            face=build_face_unlock(ctx, self.engine), on_face_result=face_result)
+            face=face, on_face_result=face_result)

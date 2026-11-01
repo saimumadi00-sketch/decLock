@@ -35,9 +35,12 @@ class UnlockPrompt:
                  on_done: Callable[[bool], None], timeout: int = 60, max_attempts: int = 3,
                  on_failure: Callable[[], None] = lambda: None, face=None,
                  on_face_result: Callable[[str, object], None] = lambda state, score: None,
-                 lockout: Callable[[], float] = lambda: 0, fullscreen: bool = True):
+                 lockout: Callable[[], float] = lambda: 0, fullscreen: bool = True,
+                 title: str = None, prompt: str = "Enter the Gatekeeper password to continue.",
+                 confirm_text: str = "Unlock"):
         # verify(password) -> bool; on_done(allowed) resumes or kills the app; lockout() -> seconds left
         self.verify, self.on_done, self.on_failure = verify, on_done, on_failure
+        self.title, self.prompt, self.confirm_text = title or f"{app_name} is locked", prompt, confirm_text
         self.lockout = lockout
         self.face, self.on_face_result = face, on_face_result  # face: matcher.FaceUnlock or None
         self.attempts_left, self.remaining, self.finished = max_attempts, timeout, False
@@ -96,7 +99,7 @@ class UnlockPrompt:
         self._fade(0.0, self.peak, FADE_IN_MS, ease_out)
         self._tick()                              # starts the countdown to auto-deny
         if self.face:
-            self.face_label.config(text="Looking for your face... (or type the password)")
+            self.face_label.config(text="Look straight at the camera (or type the password)")
             self.anim.fade_in(FADE_IN_MS)
             self.win.after(FACE_START_MS, self._start_face)
 
@@ -105,10 +108,10 @@ class UnlockPrompt:
         if self.face:  # the Face ID animation only appears when face unlock is usable
             self.anim = face_anim.FaceIDAnimation(card, size=168, bg=CARD)
             self.anim.pack(pady=(0, 6))
-        tk.Label(card, text=f"{app_name} is locked", bg=CARD, fg=TEXT, font=(FONT, 16, "bold")).pack()
+        tk.Label(card, text=self.title, bg=CARD, fg=TEXT, font=(FONT, 16, "bold")).pack()
         self.face_label = tk.Label(card, text=" ", bg=CARD, fg=MUTED, font=(FONT, 10))
         self.face_label.pack(pady=(4, 0))
-        tk.Label(card, text="Enter the Gatekeeper password to continue.", bg=CARD, fg=MUTED,
+        tk.Label(card, text=self.prompt, bg=CARD, fg=MUTED,
                  font=(FONT, 10)).pack(pady=(10, 8))
         self.entry = tk.Entry(card, show="*", width=28, bg=FIELD, fg=TEXT, insertbackground=TEXT, relief="flat",
                               font=(FONT, 12), highlightthickness=1, highlightbackground=CARD_EDGE,
@@ -122,7 +125,7 @@ class UnlockPrompt:
         self.countdown.pack()
         buttons = tk.Frame(card, bg=CARD)
         buttons.pack(pady=(10, 0))
-        for text, command, bg in (("Cancel", self._cancel, FIELD), ("Unlock", self._submit, ACCENT)):
+        for text, command, bg in (("Cancel", self._cancel, FIELD), (self.confirm_text, self._submit, ACCENT)):
             tk.Button(buttons, text=text, command=command, bg=bg, fg="white", activebackground=bg,
                       activeforeground="white", relief="flat", bd=0, padx=22, pady=7, font=(FONT, 10, "bold"),
                       cursor="hand2").pack(side="left", padx=5)
@@ -173,10 +176,16 @@ class UnlockPrompt:
             # Face unlock gave up; the password path stays open.
             self.on_face_result(state, self.face.best)
             self.anim.set_state(face_anim.FAILURE if state == "failed" else face_anim.UNAVAILABLE)
-            self.face_label.config(text="Face not recognized. Enter the password." if state == "failed"
+            reason = getattr(self.face, "reason", "")
+            self.face_label.config(text=(f"Face check failed ({reason}). Enter the password." if reason
+                                         else "Face not recognized. Enter the password.") if state == "failed"
                                    else "Camera unavailable. Enter the password.")
         else:
-            self.win.after(100, self._poll_face)  # still searching
+            # Still running: show the challenge's current instruction ("Slowly turn your head left").
+            instruction = getattr(self.face, "instruction", "")
+            if instruction and self.face_label.cget("text") != instruction:
+                self.face_label.config(text=instruction)
+            self.win.after(100, self._poll_face)
 
     # -- password ------------------------------------------------------------------------------
     def _tick(self) -> None:

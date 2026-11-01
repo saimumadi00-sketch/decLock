@@ -1,0 +1,48 @@
+GATEKEEPER (decLock) - THIRD-PARTY NOTICES
+
+Gatekeeper is Copyright (c) 2026 saimumadi00-sketch. It includes the following components, which
+are NOT owned by saimumadi00-sketch. Each remains the property of its authors and is used under the
+licence shown. The full licence texts are available at the links given.
+
+
+FACE MODELS (in the "models" folder)
+
+  scrfd_500m.onnx, arcface_mbf.onnx
+    InsightFace "buffalo_s" pretrained models - https://github.com/deepinsight/insightface
+    Licence: non-commercial research use only. These models may not be used commercially.
+
+  minifasnet_v2.onnx, minifasnet_v1se.onnx
+    Converted from Silent-Face-Anti-Spoofing, Copyright minivision-ai
+    https://github.com/minivision-ai/Silent-Face-Anti-Spoofing
+    Licence: Apache License 2.0 - https://www.apache.org/licenses/LICENSE-2.0
+    Modification: the PyTorch weights were converted to ONNX format (tools\convert_minifasnet.py).
+
+
+RUNTIME LIBRARIES
+
+  Python 3.10        Python Software Foundation License    https://docs.python.org/3/license.html
+  Tcl/Tk             Tcl/Tk License (BSD-style)            https://www.tcl.tk/software/tcltk/license.html
+  OpenCV             Apache License 2.0                    https://github.com/opencv/opencv
+  ONNX Runtime       MIT License, (c) Microsoft            https://github.com/microsoft/onnxruntime
+  NumPy              BSD 3-Clause License                  https://numpy.org/doc/stable/license.html
+  bcrypt             Apache License 2.0                    https://github.com/pyca/bcrypt
+  cryptography       Apache License 2.0 or BSD 3-Clause    https://github.com/pyca/cryptography
+  OpenSSL            Apache License 2.0 / OpenSSL License  https://www.openssl.org/source/license.html
+  psutil             BSD 3-Clause License                  https://github.com/giampaolo/psutil
+  Pillow             MIT-CMU License                       https://github.com/python-pillow/Pillow
+  cffi               MIT License                           https://github.com/python-cffi/cffi
+  pycparser          BSD 3-Clause License                  https://github.com/eliben/pycparser
+  charset-normalizer MIT License                           https://github.com/jawah/charset_normalizer
+  PyYAML             MIT License                           https://github.com/yaml/pyyaml
+  pyreadline3        BSD License                           https://github.com/pyreadline3/pyreadline3
+  SQLite             Public domain                         https://www.sqlite.org/copyright.html
+
+
+BUILD TOOLS (not part of the installed program)
+
+  PyInstaller bootloader    GPL 2.0 with an exception that allows distributing built programs
+                            under any licence - https://pyinstaller.org/en/stable/license.html
+  Inno Setup                Inno Setup License - https://jrsoftware.org/files/is/license.txt
+
+
+THE SOFTWARE AND THESE COMPONENTS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
