@@ -92,8 +92,11 @@ class Enrolment:
 
     def __init__(self, folder=None, sid=None, frozen=None):
         frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
-        if folder is None:
-            folder = default_folder() if frozen else None
+        if folder is None and frozen:
+            try:
+                folder = default_folder()
+            except Exception:
+                log.warning("could not find the ProgramData folder; enrolment markers are off", exc_info=True)
         self.folder = Path(folder) if folder else None
         self._sid = sid
 
@@ -111,22 +114,31 @@ class Enrolment:
     def _marker(self) -> Path:
         return self.folder / self.sid
 
+    # Every public method below is fail-safe: any error (an unexpected Windows API result, a
+    # permissions surprise) is logged and treated as "no marker". The marker is an extra safeguard;
+    # it must never stop Gatekeeper from starting or the owner from using it.
+
     def enrolled(self) -> bool:
-        return self.active and self._marker().exists()
+        try:
+            return self.active and self._marker().exists()
+        except Exception:
+            log.warning("could not check the enrolment marker", exc_info=True)
+            return False
 
     def mark(self) -> bool:
         """Add this user's marker (once). True if it exists afterwards. Never raises."""
-        if not self.active:
-            return False
         try:
+            if not self.active:
+                return False
             if not self._marker().exists():
                 fd = os.open(self._marker(), os.O_CREAT | os.O_EXCL | os.O_WRONLY)  # add-file only, no edits
                 os.close(fd)
         except FileExistsError:
             pass
-        except OSError as exc:
-            log.warning("could not record enrolment in %s: %s", self.folder, exc)
-        return self._marker().exists()
+        except Exception:
+            log.warning("could not record enrolment in %s", self.folder, exc_info=True)
+            return False
+        return self.enrolled()
 
 
 def setup_blocked(db, enrolment: Enrolment = None) -> bool:
@@ -134,12 +146,19 @@ def setup_blocked(db, enrolment: Enrolment = None) -> bool:
     from . import auth
     if auth.has_password(db):
         return False
-    enrolment = enrolment or Enrolment()
+    try:
+        enrolment = enrolment or Enrolment()
+    except Exception:
+        log.warning("enrolment check unavailable", exc_info=True)
+        return False
     return enrolment.enrolled()
 
 
 def sync(db, enrolment: Enrolment = None) -> None:
     """Make sure a user who has a password also has a marker (covers installs made before markers)."""
     from . import auth
-    if auth.has_password(db):
-        (enrolment or Enrolment()).mark()
+    try:
+        if auth.has_password(db):
+            (enrolment or Enrolment()).mark()
+    except Exception:
+        log.warning("could not sync the enrolment marker", exc_info=True)

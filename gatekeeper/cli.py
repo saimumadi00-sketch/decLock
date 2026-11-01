@@ -321,7 +321,8 @@ def _ask_uninstall(gate) -> bool:
 
     UnlockPrompt(root, "Gatekeeper", gate.verify, done, max_attempts=3,
                  on_failure=lambda: gate.record("bad_password", "uninstaller"), lockout=gate.lockout,
-                 title="Uninstall Gatekeeper?", prompt="Enter the Gatekeeper password to uninstall it.",
+                 title="Uninstall Gatekeeper?",
+                 prompt=f"Enter the Gatekeeper password of {gate.owner} to uninstall it.",
                  confirm_text="Uninstall")
     root.mainloop()
     root.destroy()
@@ -335,6 +336,22 @@ def confirm_uninstall_main() -> int:
     return 0 if confirm_uninstall(_ask_uninstall) else 1
 
 
+def release_folders_main() -> int:
+    """Run by the uninstaller: unlock every folder any Windows user locked, so nothing is left
+    inaccessible once Gatekeeper is gone. Administrator only: for anyone else it would be a way
+    around the folder lock."""
+    from . import winapi
+    if not winapi.is_admin():
+        print("release-folders needs Administrator rights (the uninstaller runs it).")
+        return 1
+    from .config import data_dir
+    from .folders import release_everywhere
+    from .uninstall import candidate_dirs
+    released = release_everywhere(candidate_dirs(data_dir()))
+    print(f"Unlocked {released} folder(s).")
+    return 0
+
+
 COMMANDS = {"init": cmd_init, "add": cmd_add, "remove": cmd_remove, "list": cmd_list,
             "status": cmd_status, "verify-log": cmd_verify_log, "run": cmd_run, "gui": cmd_gui,
             "usb": cmd_usb, "idle-lock": cmd_idle_lock, "lock-now": cmd_lock_now,
@@ -345,6 +362,8 @@ def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if "confirm-uninstall" in argv:  # hidden: only the uninstaller calls it
         return confirm_uninstall_main()
+    if "release-folders" in argv:  # hidden: only the uninstaller calls it
+        return release_folders_main()
     parser = argparse.ArgumentParser(prog="gatekeeper")
     parser.add_argument("--dev", action="store_true", help="log only; never kill, block or lock")
     parser.add_argument("--service", action="store_true", help=argparse.SUPPRESS)  # set by the installer

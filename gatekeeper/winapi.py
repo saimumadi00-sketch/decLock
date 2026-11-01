@@ -18,21 +18,33 @@ def idle_seconds() -> float:
 
 
 def session_locked() -> bool:
-    """Is the Windows lock screen (or another secure desktop) showing instead of the user's desktop?
+    """Is this Windows session locked (lock screen showing)?
 
-    While it is, this session can't open or switch to the input desktop. False on other systems."""
+    Asks Remote Desktop Services for the session's lock flag (WTSSessionInfoEx). Unlike checking
+    whether the input desktop is reachable, this is NOT fooled by a UAC prompt or the Ctrl+Alt+Del
+    screen, which would otherwise re-lock open apps every time an admin prompt appears.
+    Returns False when the answer is unavailable (other systems, or the call fails), so a failure
+    only means "no re-lock on Windows lock"; the idle re-lock still works."""
     try:
-        user32 = ctypes.windll.user32
-    except AttributeError:
+        wtsapi32 = ctypes.windll.wtsapi32
+    except (AttributeError, OSError):
         return False
-    user32.OpenInputDesktop.restype = wintypes.HANDLE
-    desktop = user32.OpenInputDesktop(0, False, 0x0100)  # DESKTOP_SWITCHDESKTOP
-    if not desktop:
-        return True  # the input desktop belongs to Winlogon: locked (or a UAC prompt is up)
+    buffer, size = ctypes.c_void_p(), wintypes.DWORD()
+    # (server = WTS_CURRENT_SERVER_HANDLE, session = WTS_CURRENT_SESSION, class 25 = WTSSessionInfoEx)
+    wtsapi32.WTSQuerySessionInformationW.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.c_int,
+                                                    ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.DWORD)]
+    if not wtsapi32.WTSQuerySessionInformationW(None, 0xFFFFFFFF, 25, ctypes.byref(buffer), ctypes.byref(size)):
+        return False
     try:
-        return not user32.SwitchDesktop(desktop)
+        if size.value < 20:
+            return False
+        # WTSINFOEXW: DWORD Level; then (8-byte aligned) WTSINFOEX_LEVEL1_W: ULONG SessionId,
+        # WTS_CONNECTSTATE_CLASS SessionState, LONG SessionFlags -> SessionFlags sits at byte 16.
+        level = ctypes.c_uint32.from_address(buffer.value).value
+        flags = ctypes.c_int32.from_address(buffer.value + 16).value
+        return level == 1 and flags == 0  # WTS_SESSIONSTATE_LOCK = 0, UNLOCK = 1, UNKNOWN = -1
     finally:
-        user32.CloseDesktop(desktop)
+        wtsapi32.WTSFreeMemory(buffer)
 
 
 def lock_workstation() -> bool:

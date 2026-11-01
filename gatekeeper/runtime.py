@@ -7,8 +7,10 @@ dashboard window.
 
 import logging
 import queue
+import threading
 
 from . import auth
+from .folders import FolderLocker
 from .guard import Guard
 from .idle import IdleLocker, Relocker, relock_minutes
 from .matcher import build_face_unlock
@@ -28,6 +30,8 @@ class GuardRuntime:
         self._engine = None  # FaceEngine, loaded on first use
         self._after = None   # the pending _pump timer
         self.relocker = None  # locks open apps again when Windows locks or the user is idle
+        self.folders = FolderLocker(ctx)
+        self._folder_job = None  # background thread running icacls (re-lock / repair)
         self._ticks = 0
         self._session_locked = False
 
@@ -48,7 +52,7 @@ class GuardRuntime:
         log.info("Guard running (%s).", "DEV: log only" if self.ctx.dev else "enforcing")
         self.guard = Guard(self.ctx, self._events.put)
         self.guard.start()
-        self.relocker = Relocker(self.guard, lambda: relock_minutes(self.ctx.db))
+        self.relocker = Relocker(self, lambda: relock_minutes(self.ctx.db))  # calls self.relock()
         self.usb_watcher = UsbWatcher(self.ctx, UsbPolicy(self.ctx))
         self.usb_watcher.start()
         self.running = True
@@ -90,8 +94,31 @@ class GuardRuntime:
         self._ticks += 1
         if self._ticks % 5 == 0:  # once a second
             self._relock_tick()
+        if self._ticks % 150 == 0:  # every 30 seconds: put back folder locks removed behind our back
+            self._folder_background(self.folders.enforce)
+            witness = getattr(self.ctx.audit, "witness", None)
+            if witness is not None:
+                witness.checkpoint(self.ctx.db)  # at most hourly; cheap otherwise
         self._show_next()
         self._after = self.root.after(200, self._pump)
+
+    def relock(self, reason: str) -> None:
+        """Windows locked or the PC went idle: lock open apps and unlocked folders again."""
+        self.guard.relock(reason)
+        self._folder_background(lambda: self.folders.relock_all(reason))
+
+    def _folder_background(self, job) -> None:
+        """Run a folder job (icacls can take a while) off the Tk thread, one at a time."""
+        if self._folder_job is not None and self._folder_job.is_alive():
+            return
+
+        def run():
+            try:
+                job()
+            except Exception:
+                log.exception("folder job failed")
+        self._folder_job = threading.Thread(target=run, name="folders", daemon=True)
+        self._folder_job.start()
 
     def _relock_tick(self) -> None:
         """Re-lock open apps when needed, and re-ask for held ones once someone is back."""
@@ -120,6 +147,8 @@ class GuardRuntime:
 
         def face_result(face_state: str, score) -> None:  # log every face attempt with its best score
             shown = "n/a" if score is None else f"{score:.2f}"
+            if face_state == "failed" and score is not None:  # a face was seen and not accepted
+                auth.face_failed(ctx.db, ctx.audit)
             why = getattr(face, "reason", "") if face_state == "failed" else ""
             ctx.audit.record({"matched": "face_unlock", "failed": "face_failed"}.get(face_state, "face_unavailable"),
                              f"{name} best_score={shown}" + (f" ({why})" if why else ""))

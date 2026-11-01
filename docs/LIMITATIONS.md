@@ -19,7 +19,17 @@ Read this before relying on it.
 | **Editing a locked program's file** | Renamed or copied programs are recognised by their built-in original name and a SHA-256 fingerprint. Someone who edits the file itself (changing both its version information and its bytes) is not recognised. A program with no version information is only fingerprinted once it has run while locked, or was locked by browsing to its `.exe`. | Lock apps by browsing to their `.exe`; use a standard account. |
 | **Changing the time zone (lock schedules)** | Schedules use local time, and a standard user may change the time zone, which shifts "now" out of the lock window. | Leave schedules off (always locked) for apps that matter. |
 | **Changing the system clock** | The brute-force lockout timer uses wall-clock time. | Standard account (changing the clock needs admin). |
-| **Already-mounted USB drives; non-storage USB devices** | The block disables the storage driver for new devices only. | Out of scope for this tool. |
+| **Already-mounted USB drives; network, cloud, email, Bluetooth** | The block disables the storage driver for new devices only. | Out of scope for this tool. |
+
+## Folder lock
+
+Locked folders get a "deny" permission for Everyone. Windows enforces it for every program, but
+the folder's owner (you, or anyone in your unlocked session) and administrators can still change
+permissions by hand, exactly as they could stop Gatekeeper. Gatekeeper puts a removed lock back
+within 30 seconds while it runs. Windows can't show a password prompt when a locked folder is
+opened, so folders are unlocked from the dashboard. Folders that Windows, programs or Gatekeeper
+need (drive roots, Windows, Program Files, AppData, your profile and its main folders) can't be
+locked; lock a folder inside them instead.
 
 ## Recommended setup
 
@@ -38,6 +48,19 @@ Read this before relying on it.
   a marker in `C:\ProgramData\Gatekeeper\enrolled` (users can add, never delete) refuses it until an admin clears it.
 - Apps that are already open lock again when Windows locks and after the re-lock idle time (default 10 minutes).
   They are frozen and held, never closed, so unsaved work survives a wrong or unanswered prompt.
+- Face unlock: models are built from the exact bytes that were hash-checked; the installed build only
+  uses its bundled models; five failed face attempts pause face unlock for 15 minutes (your password
+  ends the pause); strictness can't go below 0.30; and face unlock switches off while software that can
+  fake a webcam is installed (DirectShow virtual cameras; newer Windows 11 virtual cameras that don't
+  register that way are not detected).
+- USB blocking covers USBSTOR, UASPStor (fast USB 3 drives) and the removable-storage policy (phones,
+  card readers, CD/DVD; this one can need a sign-out to apply). A password-approved temporary allow
+  blocks again by itself, backed by a one-shot SYSTEM scheduled task. If the block is turned off
+  while Gatekeeper isn't running as Administrator it can't repair it, but the dashboard shows it in red.
+- Uninstalling needs the Gatekeeper password of every Windows user who set it up.
+- The activity log is checkpointed about once an hour into the add-only ProgramData folder. Rewriting
+  or deleting checkpointed entries fails the log check, even if every hash is recomputed. The only
+  way around it is to fake a "log reset", and resets can never be removed afterwards.
 - The installed build ignores `GATEKEEPER_DATA_DIR`, so a planted environment variable cannot move the guard
   onto an empty folder (it is logged as `env_ignored`). Only `--data-dir` in the startup shortcut can.
 - Every blocked/denied/unlocked event is logged in a hash-chained audit log that is verified at startup

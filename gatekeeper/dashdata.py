@@ -142,6 +142,13 @@ EVENT_LABELS = {
     "env_ignored": "Data-folder override ignored", "setup_blocked": "Setup refused (data missing)",
     "relock": "Open apps re-locked", "relocked": "Open app frozen", "held": "Kept frozen (not unlocked)",
     "relock_set": "Re-lock time changed",
+    "face_lockout": "Face unlock paused", "face_virtual_camera": "Face refused: software camera",
+    "face_camera_allowed": "Camera allowed for face unlock",
+    "usb_temporary_allow": "USB allowed temporarily", "usb_temporary_allow_dev": "USB temporary allow (dev)",
+    "usb_temporary_allow_ended": "USB blocked again",
+    "folder_added": "Folder locked (added)", "folder_removed": "Folder no longer protected",
+    "folder_locked": "Folder locked", "folder_unlocked": "Folder unlocked",
+    "folders_relocked": "Folders re-locked", "folder_lock_restored": "Folder lock restored", "usb_reblock_task_failed": "USB re-block task not created",
     "usb_blocked": "USB storage blocked", "usb_allowed": "USB storage allowed",
     "usb_blocked_dev": "USB block (dev, simulated)", "usb_allowed_dev": "USB allow (dev, simulated)",
     "usb_storage_seen": "USB drive seen", "usb_policy_restored": "USB block restored",
@@ -156,11 +163,11 @@ EVENT_LABELS = {
     "dashboard_grace_set": "Confirm grace changed",
 }
 # Severity buckets drive row colours and the Good / Warnings / Problems filter chips.
-GOOD = {"unlocked", "face_unlock", "guard_start", "password_set", "face_enrolled", "dashboard_login",
+GOOD = {"folder_locked", "folder_added", "unlocked", "face_unlock", "guard_start", "password_set", "face_enrolled", "dashboard_login",
         "usb_blocked", "app_added"}
-BAD = {"setup_blocked", "denied", "bad_password", "lockout", "tamper_detected", "face_failed", "enforce_failed",
+BAD = {"setup_blocked", "face_lockout", "face_virtual_camera", "denied", "bad_password", "lockout", "tamper_detected", "face_failed", "enforce_failed",
        "usb_enforce_failed"}
-WARN = {"blocked", "relocked", "held", "unclean_shutdown", "env_ignored", "usb_storage_seen", "usb_policy_restored", "face_unavailable",
+WARN = {"folder_unlocked", "folder_lock_restored", "usb_temporary_allow", "usb_reblock_task_failed", "blocked", "relocked", "held", "unclean_shutdown", "env_ignored", "usb_storage_seen", "usb_policy_restored", "face_unavailable",
         "idle_lock_failed", "manual_lock_failed"}
 SEVERITY_EVENTS = {"good": GOOD, "bad": BAD, "warn": WARN}
 
@@ -290,6 +297,7 @@ def summary(ctx) -> dict:
         "apps": ctx.db.list_apps(),
         "usb_status": usb_status(ctx),
         "usb_wanted": UsbPolicy(ctx).wanted(),
+        "usb_alert": usb_alert(ctx),
         "idle_minutes": float(ctx.db.get_setting("idle_lock_minutes", 0)),
         "face_enabled": face_unlock_enabled(ctx.db),
         "face_samples": face_sample_count(ctx.db),
@@ -533,3 +541,47 @@ class SingleInstance:
             pass
         self._fh.close()
         self._fh = None
+
+
+# -- face unlock safeguards ------------------------------------------------------------------------
+
+def blocking_cameras(db) -> list:
+    """Software cameras installed on this PC that currently switch face unlock off."""
+    from .matcher import virtual_cameras
+    return virtual_cameras(db)
+
+
+def allow_cameras(ctx, names) -> None:
+    """The owner confirms these software camera names are their real camera."""
+    import json
+    from .matcher import CAMERA_ALLOW_KEY, allowed_cameras
+    allowed = sorted(allowed_cameras(ctx.db) | set(names))
+    ctx.db.set_setting(CAMERA_ALLOW_KEY, json.dumps(allowed))
+    ctx.audit.record("face_camera_allowed", ", ".join(sorted(names)))
+
+
+def face_pause_remaining(db) -> float:
+    """Seconds face unlock is paused after too many failed face attempts (0 = not paused)."""
+    return auth.face_locked_remaining(db)
+
+
+# -- USB extras --------------------------------------------------------------------------------------
+
+def usb_alert(ctx) -> str:
+    try:
+        return UsbPolicy(ctx).alert()
+    except Exception:  # registry unreadable (or not Windows): nothing to warn about
+        return ""
+
+
+def usb_temporary_remaining(ctx) -> float:
+    return UsbPolicy(ctx, reg=_NoRegistry()).temporary_remaining()
+
+
+class _NoRegistry:
+    """Reading the temporary-allow timer needs no registry access."""
+    def get_start(self):
+        return None
+
+    def set_start(self, value):
+        raise PermissionError("read-only")

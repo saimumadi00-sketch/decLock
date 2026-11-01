@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .audit import AuditLog
 from .enrolment import Enrolment, sync as sync_enrolment
+from .logwitness import LogWitness
 from .config import DATA_DIR_ENV, data_dir, data_dir_env_ignored, setup_logging
 from .crypto import KeyStore
 from .db import Database
@@ -31,6 +32,7 @@ def open_context(dev: bool, directory=None, console: bool = True) -> Context:
     db = Database(path / "gatekeeper.db")
     ctx = Context(dev, path, db, AuditLog(db, path / "audit.head"), KeyStore(path), Enrolment())
     sync_enrolment(db, ctx.enrolment)  # installs set up before markers existed get one now
+    ctx.audit.witness = LogWitness(ctx.enrolment)
     if directory is None and data_dir_env_ignored():
         log.warning("%s is set but ignored in the installed build", DATA_DIR_ENV)
         ctx.audit.record("env_ignored", f"{DATA_DIR_ENV} is set; the installed build ignores it")

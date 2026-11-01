@@ -22,7 +22,8 @@ The first launch asks you to choose a password. After logging in you get a sideb
 |---|---|
 | Dashboard | Status tiles (with a "Problems (24h)" tile that opens the log filtered to problems), a 7-day chart you can switch between unlocked/denied, blocked starts and most-attempted apps (click a day to open its log), first-run checklist, pause/resume, verify the log, lock Windows |
 | Locked apps | Add by name, browse for an `.exe`, pick from running programs, or add a preset (browsers, games, chat, office). Shows last attempt and denied count; set a per-app lock schedule (e.g. 22:00-06:00) |
-| USB and idle lock | Block or allow USB storage, set the idle-lock minutes, lock Windows now |
+| Locked folders | Choose folders to lock; unlock, lock again or stop protecting them. Locked folders can't be opened, read, changed or deleted by any program |
+| USB and idle lock | Block or allow USB storage (pen drives, fast USB 3 drives, phones, card readers); allow it for a few minutes with your password, after which it blocks again by itself; set the idle-lock minutes, lock Windows now |
 | Face unlock | Enroll with a live camera preview, run the full unlock check as a test (with live match, real-face and head-pose numbers), adjust strictness and timeout, delete face data |
 | Activity log | Filter by event, severity, time range, day or text; export CSV; verify the chain; remove old entries; reset the chain |
 | Settings | Change password, light/dark theme, optional 60-second password memory, dashboard auto-lock, log retention, open the data folder, release frozen apps |
@@ -112,6 +113,11 @@ whether to delete your settings and face data (`%APPDATA%\Gatekeeper`).
 |---|---|
 | An app is frozen | `gatekeeper.exe release` (no password needed once the guard has stopped or crashed). |
 | Forgot the Gatekeeper password | There is no backdoor. Stop the guard (Task Manager), delete `%APPDATA%\Gatekeeper`, then have an **administrator** delete your marker file in `C:\ProgramData\Gatekeeper\enrolled` (it is named after your Windows SID; `whoami /user` shows it). Then set up again. Face data is lost. |
+| A folder stays locked and Gatekeeper is gone | Elevated prompt: `icacls "D:\Private" /remove:d *S-1-1-0` (uninstalling Gatekeeper does this for every locked folder). |
+| USB stays blocked after uninstalling | Elevated prompt: the three commands at the top of `gatekeeper/usb.py` (USBSTOR, UASPStor, and the removable-storage policy). |
+| "Face unlock is OFF: camera software..." | A program that can fake a webcam (OBS Virtual Camera, ManyCam...) is installed. Uninstall it, or on the Face unlock page confirm it is your real camera. |
+| Face unlock stopped offering itself | Five failed face attempts pause it for 15 minutes. Entering your password ends the pause. |
+| Uninstaller asks for several passwords | Every Windows user who set up Gatekeeper must confirm with their own Gatekeeper password, because uninstalling removes everyone's protection. |
 | "Setup is locked" screen | Gatekeeper was set up for this Windows user before and its data has gone missing, so a new password is refused (otherwise anyone could delete the folder and choose their own). Same fix as above: an administrator deletes your marker file. |
 | An open app froze and asks for the password | Expected: apps you already unlocked lock again when Windows locks, or after 10 idle minutes (Settings > Re-lock open apps after). They are kept frozen, never closed, until you unlock them. |
 | Locked out after wrong passwords | Wait (30 s, doubling to 15 min). Face unlock still works. |

@@ -54,10 +54,11 @@ Name: "{group}\{#AppName} command prompt"; Filename: "{cmd}"; Parameters: "/k ""
 
 [Run]
 ; Enrolment folder access list: SYSTEM and Administrators get full control. Users may only list the
-; folder and ADD files (WD = add file; no delete, no subfolders). Files added there are read-only to
+; folder and ADD files (RD list, X traverse, RA/REA/RC read attributes and permissions, S synchronize,
+; WD = add file; no AD = no subfolders, no DE/DC = no deletes). Files added there are read-only to
 ; everyone but admins, and OWNER RIGHTS (S-1-3-4) takes away the creator's implicit right to change a
 ; file's permissions. So a standard user can record "I set Gatekeeper up" but never remove that record.
-Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\{#AppName}\enrolled"" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F *S-1-5-32-545:(RX,WD) *S-1-5-32-545:(OI)(IO)R *S-1-3-4:(OI)(IO)R"; \
+Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\{#AppName}\enrolled"" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F *S-1-5-32-545:(RD,X,RA,REA,RC,S,WD) *S-1-5-32-545:(OI)(IO)R *S-1-3-4:(OI)(IO)R"; \
   Flags: runhidden waituntilterminated; StatusMsg: "Securing the enrolment folder..."
 ; First launch shows the "choose a password" screen inside the app.
 Filename: "{app}\gatekeeperw.exe"; Parameters: "--service gui"; Description: "Open Gatekeeper now"; \
@@ -72,8 +73,15 @@ Type: filesandordirs; Name: "{commonappdata}\{#AppName}"
 ; machine is not left with a policy and no tool to manage it.
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM gatekeeperw.exe"; Flags: runhidden; RunOnceId: "StopGuard"
 Filename: "{app}\gatekeeper.exe"; Parameters: "release"; Flags: runhidden; RunOnceId: "ReleaseApps"
+; Unlock every user's locked folders, or they would stay inaccessible with no Gatekeeper to open them.
+Filename: "{app}\gatekeeper.exe"; Parameters: "release-folders"; Flags: runhidden waituntilterminated; RunOnceId: "ReleaseFolders"
 Filename: "{sys}\reg.exe"; Parameters: "add HKLM\SYSTEM\CurrentControlSet\Services\USBSTOR /v Start /t REG_DWORD /d 3 /f"; \
   Flags: runhidden; RunOnceId: "RestoreUsb"
+Filename: "{sys}\cmd.exe"; Parameters: "/c reg query HKLM\SYSTEM\CurrentControlSet\Services\UASPStor >nul 2>&1 && reg add HKLM\SYSTEM\CurrentControlSet\Services\UASPStor /v Start /t REG_DWORD /d 3 /f"; \
+  Flags: runhidden; RunOnceId: "RestoreUasp"
+Filename: "{sys}\reg.exe"; Parameters: "delete HKLM\SOFTWARE\Policies\Microsoft\Windows\RemovableStorageDevices /v Deny_All /f"; \
+  Flags: runhidden; RunOnceId: "RestoreRemovablePolicy"
+Filename: "{sys}\schtasks.exe"; Parameters: "/delete /tn ""Gatekeeper USB re-block"" /f"; Flags: runhidden; RunOnceId: "RemoveReblockTask"
 
 [Code]
 function PrepareToInstall(var NeedsRestart: Boolean): String;

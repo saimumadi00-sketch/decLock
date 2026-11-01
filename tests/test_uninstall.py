@@ -29,25 +29,50 @@ def test_unprotected_installs_need_no_password(tmp_path):
     gate.close()
 
 
-def test_password_of_any_profile_is_accepted(tmp_path):
+def test_each_user_is_checked_against_their_own_password(tmp_path):
     users = tmp_path / "Users"
     gate = UninstallGate([make_profile(users, "alice", "alice-password"),
-                          make_profile(users, "bob", "bob-password")])
-    assert gate.protected
-    assert not gate.verify("wrong-password")
-    assert gate.verify("bob-password")
-    assert gate.verify("alice-password")
+                          make_profile(users, "bob", "bob-password"), make_profile(users, "carol")])
+    assert [u.owner for u in gate.users] == ["alice", "bob"]  # carol set no password
+    alice, bob = gate.users
+    assert alice.verify("alice-password") and not alice.verify("bob-password")
+    assert bob.verify("bob-password") and not bob.verify("alice-password")
     gate.close()
 
 
-def test_wrong_passwords_hit_the_shared_lockout(tmp_path):
+def test_wrong_passwords_hit_that_users_lockout(tmp_path):
     d = make_profile(tmp_path / "Users", "alice", "alice-password")
     gate = UninstallGate([d])
+    alice = gate.users[0]
     for _ in range(auth.FREE_FAILURES):
-        assert not gate.verify("wrong-password")
-    assert gate.lockout() > 0
-    assert not gate.verify("alice-password")  # even the right one is refused while locked out
+        assert not alice.verify("wrong-password")
+    assert alice.lockout() > 0
+    assert not alice.verify("alice-password")  # even the right one is refused while locked out
     gate.close()
+
+
+def _two_users(tmp_path, monkeypatch):
+    users = tmp_path / "Users"
+    dirs = [make_profile(users, "alice", "alice-password"), make_profile(users, "bob", "bob-password")]
+    monkeypatch.setattr(uninstall, "data_dir", lambda: dirs[0])
+    monkeypatch.setattr(uninstall, "candidate_dirs", lambda own: dirs)
+    return dirs
+
+
+def test_uninstall_needs_every_users_password(tmp_path, monkeypatch):
+    _two_users(tmp_path, monkeypatch)
+    passwords = {"alice": "alice-password", "bob": "bob-password"}
+    asked = []
+
+    def own_password_only_for_bob(user):  # bob set up Gatekeeper and knows only his own password
+        asked.append(user.owner)
+        return user.verify("bob-password")
+    monkeypatch.setattr(cli, "_ask_uninstall", own_password_only_for_bob)
+    assert cli.main(["confirm-uninstall"]) == 1
+    assert asked == ["alice"]  # refused at the first user whose password he doesn't know
+
+    monkeypatch.setattr(cli, "_ask_uninstall", lambda user: user.verify(passwords[user.owner]))
+    assert cli.main(["confirm-uninstall"]) == 0
 
 
 def test_confirm_uninstall_asks_and_logs(tmp_path, monkeypatch):

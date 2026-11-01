@@ -144,13 +144,15 @@ def test_set_retention_and_autolock(ctx):
 def test_set_face_options(ctx):
     assert dashdata.set_face_options(ctx, True, 0.5, 10) == ""
     assert dashdata.face_options(ctx.db) == (True, 0.5, 10.0)
-    assert "other people" in dashdata.set_face_options(ctx, False, 0.27, 8)
-    assert dashdata.face_options(ctx.db) == (False, 0.27, 8.0)
+    assert dashdata.set_face_options(ctx, False, 0.30, 8) == ""  # the floor itself is allowed
+    assert dashdata.face_options(ctx.db) == (False, 0.30, 8.0)
+    with pytest.raises(ValueError):
+        dashdata.set_face_options(ctx, True, 0.27, 8)  # below the floor: other people start to match
     with pytest.raises(ValueError):
         dashdata.set_face_options(ctx, True, 0.95, 10)
     with pytest.raises(ValueError):
         dashdata.set_face_options(ctx, True, 0.5, 99)
-    assert dashdata.face_options(ctx.db) == (False, 0.27, 8.0)  # a rejected save changes nothing
+    assert dashdata.face_options(ctx.db) == (False, 0.30, 8.0)  # a rejected save changes nothing
 
 
 # -- passwords ------------------------------------------------------------------------------------------------

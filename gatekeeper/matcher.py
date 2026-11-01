@@ -20,15 +20,16 @@ from .liveness import Challenge, Observation, head_pose, random_challenge
 log = logging.getLogger("gatekeeper.matcher")
 
 DEFAULT_THRESHOLD = 0.40   # ArcFace cosine similarity: strangers score around 0-0.25, the same person 0.4+
-THRESHOLD_RANGE = (0.25, 0.80)
 WEAK_THRESHOLD = 0.30      # below this, other people start to match
+THRESHOLD_RANGE = (WEAK_THRESHOLD, 0.80)  # the weak zone is not offered at all
 DEFAULT_TIMEOUT = 20.0     # seconds for the whole attempt (the challenge takes a few)
 TIMEOUT_RANGE = (8, 45)
 MAX_BAD_FRAMES = 100       # consecutive failed camera reads before giving up (~2 s)
 
 
 def get_threshold(db) -> float:
-    return float(db.get_setting("face_threshold", DEFAULT_THRESHOLD))
+    """The stored strictness, never below the safe floor (older versions allowed 0.25)."""
+    return max(float(db.get_setting("face_threshold", DEFAULT_THRESHOLD)), THRESHOLD_RANGE[0])
 
 
 def get_timeout(db) -> float:
@@ -42,6 +43,49 @@ def face_unlock_enabled(db) -> bool:
 def enrolment_current(db) -> bool:
     """Were the stored samples made by the current models? Older ones can't be compared."""
     return db.get_setting("face_model") == MODEL_ID
+
+
+# DirectShow's "video input device" category. Real webcams are found through their drivers; SOFTWARE
+# cameras (OBS Virtual Camera, ManyCam, Snap Camera, ...) register themselves as filters under this
+# key instead. A software camera can feed a perfect deepfake straight into the face check, where the
+# photo/screen detector can't see it, so face unlock is refused while one is installed.
+_VIDEO_INPUT = r"CLSID\{860BB310-5D01-11d0-BD3B-00A0C911CE86}\Instance"
+CAMERA_ALLOW_KEY = "face_camera_allow"  # names the owner confirmed are their real camera (JSON list)
+
+
+def software_cameras() -> list:
+    """Friendly names of software (registry-registered) video capture filters. [] off Windows."""
+    try:
+        import winreg
+    except ImportError:
+        return []
+    names = []
+    try:
+        with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, _VIDEO_INPUT) as key:  # machine + per-user registrations
+            for i in range(winreg.QueryInfoKey(key)[0]):
+                try:
+                    with winreg.OpenKey(key, winreg.EnumKey(key, i)) as sub:
+                        names.append(str(winreg.QueryValueEx(sub, "FriendlyName")[0]))
+                except OSError:
+                    names.append("(unnamed camera filter)")
+    except OSError:
+        return []
+    return sorted(set(names))
+
+
+def allowed_cameras(db) -> set:
+    import json
+    try:
+        return set(json.loads(db.get_setting(CAMERA_ALLOW_KEY, "[]")))
+    except (ValueError, TypeError):
+        return set()
+
+
+def virtual_cameras(db=None, found=None) -> list:
+    """Software cameras that block face unlock (installed and not allowed by the owner)."""
+    found = software_cameras() if found is None else found
+    allowed = allowed_cameras(db) if db is not None else set()
+    return [name for name in found if name not in allowed]
 
 
 class FaceMatcher:
@@ -159,6 +203,14 @@ def build_face_unlock(ctx, engine_factory):
     from .face_store import FaceStore
     if not face_unlock_enabled(ctx.db) or not enrolment_current(ctx.db):
         return None  # off, or enrolled with older models: the user must re-enrol
+    from .auth import face_locked_remaining
+    if face_locked_remaining(ctx.db) > 0:
+        return None  # too many failed face attempts: password only until it ends (or the password is used)
+    blocked = virtual_cameras(ctx.db)
+    if blocked:
+        log.warning("face unlock refused: virtual camera software installed: %s", ", ".join(blocked))
+        ctx.audit.record("face_virtual_camera", ", ".join(blocked))
+        return None
     try:
         enrolled = FaceStore(ctx.db, ctx.keys).embeddings()
         if not enrolled:
