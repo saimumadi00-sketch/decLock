@@ -36,6 +36,10 @@ Source: "THIRD_PARTY_NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "docs\LIMITATIONS.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "docs\USAGE.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 
+[Dirs]
+; Enrolment markers (see gatekeeper/enrolment.py). The first [Run] entry locks its access list down.
+Name: "{commonappdata}\{#AppName}\enrolled"
+
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Shortcuts:"
 
@@ -49,9 +53,19 @@ Name: "{commondesktop}\{#AppName}"; Filename: "{app}\gatekeeperw.exe"; Parameter
 Name: "{group}\{#AppName} command prompt"; Filename: "{cmd}"; Parameters: "/k ""cd /d ""{app}"" && gatekeeper.exe --help"""
 
 [Run]
+; Enrolment folder access list: SYSTEM and Administrators get full control. Users may only list the
+; folder and ADD files (WD = add file; no delete, no subfolders). Files added there are read-only to
+; everyone but admins, and OWNER RIGHTS (S-1-3-4) takes away the creator's implicit right to change a
+; file's permissions. So a standard user can record "I set Gatekeeper up" but never remove that record.
+Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\{#AppName}\enrolled"" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F *S-1-5-32-545:(RX,WD) *S-1-5-32-545:(OI)(IO)R *S-1-3-4:(OI)(IO)R"; \
+  Flags: runhidden waituntilterminated; StatusMsg: "Securing the enrolment folder..."
 ; First launch shows the "choose a password" screen inside the app.
 Filename: "{app}\gatekeeperw.exe"; Parameters: "--service gui"; Description: "Open Gatekeeper now"; \
   Flags: postinstall nowait runasoriginaluser skipifsilent
+
+[UninstallDelete]
+; Uninstalling (admin only, and password-checked) clears the enrolment markers, so a reinstall starts fresh.
+Type: filesandordirs; Name: "{commonappdata}\{#AppName}"
 
 [UninstallRun]
 ; Stop the guard, un-freeze anything it left suspended, and undo the USB block so the

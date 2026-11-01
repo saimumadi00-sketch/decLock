@@ -11,6 +11,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from . import auth, dashdata, tray, winapi
+from .enrolment import BLOCKED_MESSAGE, setup_blocked
 from .gui_pages import PAGES
 from .gui_widgets import P, apply_style, center, make_card, password_entry
 from .idle import IdleLocker
@@ -61,7 +62,7 @@ class Dashboard:
             self.runtime.start()  # protection starts at once, before anyone logs in
             self._show_login()
         else:
-            self._show_setup()    # first run: choose a password (protection starts after that)
+            self._show_first_run()  # choose a password (protection starts after that), unless blocked
         if self.minimized:
             self._hide()
         self.root.after(1000, self._tick)
@@ -156,7 +157,7 @@ class Dashboard:
         """Re-skin the whole window. Pages are rebuilt because their colors are set at creation."""
         apply_style(self.root, theme)
         if not self.authed:
-            self._show_login() if auth.has_password(self.ctx.db) else self._show_setup()
+            self._show_login() if auth.has_password(self.ctx.db) else self._show_first_run()
             return
         current = self.current or "dashboard"
         self._show_main()
@@ -256,6 +257,22 @@ class Dashboard:
         entry.focus_set()
         watch_lockout()  # already locked out from earlier attempts? show it straight away
         self.login_submit, self.login_var = submit, var  # exposed for tests
+
+    def _show_first_run(self) -> None:
+        """The setup screen, or, if this user was set up before and the data vanished, a refusal."""
+        if setup_blocked(self.ctx.db, self.ctx.enrolment):
+            self._show_setup_blocked()
+        else:
+            self._show_setup()
+
+    def _show_setup_blocked(self) -> None:
+        self.authed = False
+        self.ctx.audit.record("setup_blocked", "first-run setup refused: this user was set up before")
+        body = self._centered_card()
+        ttk.Label(body, text="Setup is locked", style="CardTitle.TLabel").pack(anchor="w", pady=(4, 6))
+        ttk.Label(body, text=BLOCKED_MESSAGE, style="CardMuted.TLabel", wraplength=340,
+                  justify="left").pack(anchor="w")
+        self.setup_blocked_shown = True  # for tests
 
     def _show_setup(self) -> None:
         self.authed = False

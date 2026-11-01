@@ -40,6 +40,11 @@ def cmd_init(ctx, args) -> int:
     # Changing an existing password needs the old one; the very first one doesn't.
     if auth.has_password(ctx.db) and not _require_auth(ctx):
         return 1
+    from .enrolment import BLOCKED_MESSAGE, setup_blocked
+    if setup_blocked(ctx.db, ctx.enrolment):
+        ctx.audit.record("setup_blocked", "first-run setup refused: this user was set up before")
+        print(BLOCKED_MESSAGE)
+        return 1
     new = getpass.getpass(f"New password (min {MIN_PASSWORD_LEN} chars): ")
     if new != getpass.getpass("Repeat: "):
         print("Passwords differ.")
@@ -50,6 +55,8 @@ def cmd_init(ctx, args) -> int:
         print(exc)
         return 1
     ctx.audit.record("password_set")
+    if ctx.enrolment:
+        ctx.enrolment.mark()
     print("Password saved.")
     return 0
 

@@ -111,7 +111,9 @@ whether to delete your settings and face data (`%APPDATA%\Gatekeeper`).
 | Problem | Fix |
 |---|---|
 | An app is frozen | `gatekeeper.exe release` (no password needed once the guard has stopped or crashed). |
-| Forgot the Gatekeeper password | There is no backdoor. Stop the guard (Task Manager), delete `%APPDATA%\Gatekeeper`, and set up again. Face data is lost. |
+| Forgot the Gatekeeper password | There is no backdoor. Stop the guard (Task Manager), delete `%APPDATA%\Gatekeeper`, then have an **administrator** delete your marker file in `C:\ProgramData\Gatekeeper\enrolled` (it is named after your Windows SID; `whoami /user` shows it). Then set up again. Face data is lost. |
+| "Setup is locked" screen | Gatekeeper was set up for this Windows user before and its data has gone missing, so a new password is refused (otherwise anyone could delete the folder and choose their own). Same fix as above: an administrator deletes your marker file. |
+| An open app froze and asks for the password | Expected: apps you already unlocked lock again when Windows locks, or after 10 idle minutes (Settings > Re-lock open apps after). They are kept frozen, never closed, until you unlock them. |
 | Locked out after wrong passwords | Wait (30 s, doubling to 15 min). Face unlock still works. |
 | USB storage stays blocked | Elevated prompt: `reg add HKLM\SYSTEM\CurrentControlSet\Services\USBSTOR /v Start /t REG_DWORD /d 3 /f` (or `gatekeeper.exe usb allow`). |
 | Windows lock screen won't accept the Gatekeeper password | Expected: idle lock uses your **Windows** account password. |

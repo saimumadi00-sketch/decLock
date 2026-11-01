@@ -36,6 +36,11 @@ class Guard:
         self.identity = Identifier(ctx.db)
         self._pending = {}   # app name -> [psutil.Process]
         self._granted = {}   # app name -> monotonic expiry
+        # Re-locking apps that were already open (Windows locked, or idle). Those processes may hold
+        # unsaved work, so they are frozen and HELD: a wrong or cancelled prompt never kills them.
+        self._relock_requested = False  # set by relock(), taken by the start of the next scan
+        self._relocking = False         # the scan in progress is a re-lock pass
+        self._soft = set()       # app names whose waiting processes are held, never killed
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._thread = None
@@ -47,6 +52,11 @@ class Guard:
         if apps != self._apps:  # an app was locked or unlocked: re-check every process against the new list
             self._apps, self._names = apps, {}
         locked = schedule.locked_now(self.ctx.db)  # apps whose lock schedule is active right now
+        with self._lock:  # a re-lock applies to one WHOLE pass, so start it here, never mid-pass
+            self._relocking, self._relock_requested = self._relock_requested, False
+            if self._relocking:
+                waiting = {self._key(p) for group in self._pending.values() for p in group}
+                self._seen = {k for k in self._seen if k in waiting}  # never suspend a frozen process twice
         alive, by_file = set(), []
         for proc in psutil.process_iter(["name", "create_time"]):
             try:
@@ -66,6 +76,7 @@ class Guard:
                 self._check(key, real, proc, locked)
             except psutil.Error:
                 continue
+        self._relocking = False  # a re-lock lasts exactly one full pass
         self._seen &= alive  # forget processes that have exited
         self._names = {k: v for k, v in self._names.items() if k in alive}
 
@@ -108,15 +119,56 @@ class Guard:
             queue = self._pending.setdefault(name, [])
             first = not queue  # only the first frozen instance opens a prompt; the rest wait with it
             queue.append(proc)
-        self.ctx.audit.record("blocked", f"{name} pid={proc.pid}{copy}")
-        if first:
-            self.on_locked(name)
+            soft = self._relocking or name in self._soft
+            if soft:
+                self._soft.add(name)
+        if not self._relocking:
+            self.ctx.audit.record("blocked", f"{name} pid={proc.pid}{copy}")
+        elif first:  # one line per app, not per helper process (a browser runs dozens)
+            self.ctx.audit.record("relocked", f"{name} (open app frozen until unlocked)")
+        if first and not soft:
+            self.on_locked(name)  # held (re-locked) apps are prompted for when the user is back: reprompt_held()
 
     # -- decisions ----------------------------------------------------------
-    def resolve(self, name: str, allowed: bool) -> None:
-        """The prompt's answer: resume every waiting instance of `name`, or kill them."""
+    def relock(self, reason: str) -> None:
+        """Lock again the locked apps that are open right now (and cancel unlock grants).
+
+        Called when Windows locks or the user has been idle. The next scan freezes every running
+        instance and holds it until the password (or face) is given again."""
         with self._lock:
+            self._granted.clear()
+            self._relock_requested = True
+        self.ctx.audit.record("relock", reason)
+
+    @staticmethod
+    def _key(proc: psutil.Process):
+        try:
+            return proc.pid, proc.create_time()  # same key scan() uses
+        except psutil.Error:
+            return proc.pid, None
+
+    def held(self) -> list:
+        """Apps frozen by a re-lock that are waiting for the user to come back."""
+        with self._lock:
+            return sorted(n for n in self._soft if self._pending.get(n))
+
+    def reprompt_held(self) -> None:
+        """Ask again for each held app (the runtime calls this when the user is at the PC)."""
+        for name in self.held():
+            self.on_locked(name)
+
+    def resolve(self, name: str, allowed: bool) -> None:
+        """The prompt's answer: resume every waiting instance of `name`, or kill them.
+
+        A HELD app (re-locked while open) is never killed: a refusal keeps it frozen and it is
+        asked for again later, so an unattended prompt can't destroy unsaved work."""
+        with self._lock:
+            if not allowed and name in self._soft:
+                count = len(self._pending.get(name, []))
+                self.ctx.audit.record("held", f"{name} ({count} process(es)) stays frozen")
+                return
             procs = self._pending.pop(name, [])
+            self._soft.discard(name)
             if allowed:
                 self._granted[name] = time.monotonic() + self.grant_seconds
         for proc in procs:
@@ -145,6 +197,7 @@ class Guard:
         with self._lock:
             procs = [p for group in self._pending.values() for p in group]
             self._pending.clear()
+            self._soft.clear()
         for proc in procs:
             try:
                 proc.resume()

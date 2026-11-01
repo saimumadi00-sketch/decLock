@@ -11,7 +11,7 @@ from pathlib import Path
 
 import psutil
 
-from . import auth, schedule
+from . import auth, enrolment, schedule
 from .config import PROTECTED_PROCESSES
 from .matcher import (THRESHOLD_RANGE, TIMEOUT_RANGE, WEAK_THRESHOLD, enrolment_current, face_unlock_enabled,
                       get_threshold, get_timeout)
@@ -139,7 +139,9 @@ EVENT_LABELS = {
     "face_failed": "Face not recognised", "face_unavailable": "Face unavailable",
     "guard_start": "Protection started", "guard_stop": "Protection stopped",
     "unclean_shutdown": "Unclean shutdown", "tamper_detected": "Log tampering detected",
-    "env_ignored": "Data-folder override ignored",
+    "env_ignored": "Data-folder override ignored", "setup_blocked": "Setup refused (data missing)",
+    "relock": "Open apps re-locked", "relocked": "Open app frozen", "held": "Kept frozen (not unlocked)",
+    "relock_set": "Re-lock time changed",
     "usb_blocked": "USB storage blocked", "usb_allowed": "USB storage allowed",
     "usb_blocked_dev": "USB block (dev, simulated)", "usb_allowed_dev": "USB allow (dev, simulated)",
     "usb_storage_seen": "USB drive seen", "usb_policy_restored": "USB block restored",
@@ -156,9 +158,9 @@ EVENT_LABELS = {
 # Severity buckets drive row colours and the Good / Warnings / Problems filter chips.
 GOOD = {"unlocked", "face_unlock", "guard_start", "password_set", "face_enrolled", "dashboard_login",
         "usb_blocked", "app_added"}
-BAD = {"denied", "bad_password", "lockout", "tamper_detected", "face_failed", "enforce_failed",
+BAD = {"setup_blocked", "denied", "bad_password", "lockout", "tamper_detected", "face_failed", "enforce_failed",
        "usb_enforce_failed"}
-WARN = {"blocked", "unclean_shutdown", "env_ignored", "usb_storage_seen", "usb_policy_restored", "face_unavailable",
+WARN = {"blocked", "relocked", "held", "unclean_shutdown", "env_ignored", "usb_storage_seen", "usb_policy_restored", "face_unavailable",
         "idle_lock_failed", "manual_lock_failed"}
 SEVERITY_EVENTS = {"good": GOOD, "bad": BAD, "warn": WARN}
 
@@ -326,6 +328,20 @@ def set_retention_days(ctx, value) -> int:
     return days
 
 
+def relock_minutes(db) -> float:
+    from .idle import relock_minutes as current
+    return current(db)
+
+
+def set_relock_minutes(ctx, value) -> float:
+    """Idle minutes before apps that are already open lock again (0 = only when Windows locks)."""
+    from .idle import RELOCK_KEY
+    minutes = _number(value, 0, 240, "Re-lock minutes")
+    ctx.db.set_setting(RELOCK_KEY, minutes)
+    ctx.audit.record("relock_set", str(minutes))
+    return minutes
+
+
 def set_autolock_minutes(ctx, value) -> float:
     minutes = _number(value, 0, 240, "Dashboard auto-lock minutes")
     ctx.db.set_setting(AUTOLOCK_KEY, minutes)
@@ -434,6 +450,9 @@ def create_password(ctx, new: str, repeat: str):
     """First-run password. Returns (ok, message)."""
     if auth.has_password(ctx.db):  # never let the setup screen overwrite an existing password
         return False, "A password is already set."
+    if enrolment.setup_blocked(ctx.db, ctx.enrolment):  # data deleted after setup: don't let anyone re-own it
+        ctx.audit.record("setup_blocked", "first-run setup refused: this user was set up before")
+        return False, enrolment.BLOCKED_MESSAGE
     if new != repeat:
         return False, "The two passwords differ."
     try:
@@ -441,6 +460,8 @@ def create_password(ctx, new: str, repeat: str):
     except ValueError as exc:
         return False, str(exc)
     ctx.audit.record("password_set", "first run (dashboard)")
+    if ctx.enrolment:
+        ctx.enrolment.mark()
     return True, ""
 
 

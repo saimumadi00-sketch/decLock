@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .audit import AuditLog
+from .enrolment import Enrolment, sync as sync_enrolment
 from .config import DATA_DIR_ENV, data_dir, data_dir_env_ignored, setup_logging
 from .crypto import KeyStore
 from .db import Database
@@ -20,6 +21,7 @@ class Context:
     db: Database
     audit: AuditLog
     keys: KeyStore
+    enrolment: Enrolment = None  # marker outside %APPDATA% that this user set up before
 
 
 def open_context(dev: bool, directory=None, console: bool = True) -> Context:
@@ -27,7 +29,8 @@ def open_context(dev: bool, directory=None, console: bool = True) -> Context:
     path = data_dir(directory, dev)
     setup_logging(path, dev, console)
     db = Database(path / "gatekeeper.db")
-    ctx = Context(dev, path, db, AuditLog(db, path / "audit.head"), KeyStore(path))
+    ctx = Context(dev, path, db, AuditLog(db, path / "audit.head"), KeyStore(path), Enrolment())
+    sync_enrolment(db, ctx.enrolment)  # installs set up before markers existed get one now
     if directory is None and data_dir_env_ignored():
         log.warning("%s is set but ignored in the installed build", DATA_DIR_ENV)
         ctx.audit.record("env_ignored", f"{DATA_DIR_ENV} is set; the installed build ignores it")

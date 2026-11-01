@@ -17,6 +17,24 @@ def idle_seconds() -> float:
     return ((ticks - info.dwTime) & 0xFFFFFFFF) / 1000.0  # mask handles the 49-day tick wrap
 
 
+def session_locked() -> bool:
+    """Is the Windows lock screen (or another secure desktop) showing instead of the user's desktop?
+
+    While it is, this session can't open or switch to the input desktop. False on other systems."""
+    try:
+        user32 = ctypes.windll.user32
+    except AttributeError:
+        return False
+    user32.OpenInputDesktop.restype = wintypes.HANDLE
+    desktop = user32.OpenInputDesktop(0, False, 0x0100)  # DESKTOP_SWITCHDESKTOP
+    if not desktop:
+        return True  # the input desktop belongs to Winlogon: locked (or a UAC prompt is up)
+    try:
+        return not user32.SwitchDesktop(desktop)
+    finally:
+        user32.CloseDesktop(desktop)
+
+
 def lock_workstation() -> bool:
     """Locks the Windows session (unlock = the Windows account password, not Gatekeeper's)."""
     return bool(ctypes.windll.user32.LockWorkStation())

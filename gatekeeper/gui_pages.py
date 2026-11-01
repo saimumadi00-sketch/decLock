@@ -941,9 +941,10 @@ class SettingsPage(Page):
         # -- behaviour: auto-lock, retention, theme, password grace -----------------------------
         outer, body = make_card(self, "Behaviour")
         outer.pack(fill="x", pady=(12, 0))
-        self.autolock_var, self.retention_var = tk.StringVar(), tk.StringVar()
+        self.autolock_var, self.retention_var, self.relock_var = tk.StringVar(), tk.StringVar(), tk.StringVar()
         for label, var, high, hint in (
                 ("Lock this window after", self.autolock_var, 240, "idle minutes (0 = never)"),
+                ("Re-lock open apps after", self.relock_var, 240, "idle minutes (0 = only when Windows locks)"),
                 ("Keep activity log for", self.retention_var, 3650, "days (0 = forever)")):
             row = ttk.Frame(body, style="Card.TFrame")
             row.pack(fill="x", pady=3)
@@ -981,6 +982,7 @@ class SettingsPage(Page):
 
     def refresh(self) -> None:
         self.autolock_var.set(f"{dashdata.autolock_minutes(self.ctx.db):g}")
+        self.relock_var.set(f"{dashdata.relock_minutes(self.ctx.db):g}")
         self.retention_var.set(str(int(self.ctx.db.get_setting("log_retention_days", 90))))
         self.theme_var.set(dashdata.get_theme(self.ctx.db).capitalize())
         self.grace_var.set(dashdata.confirm_grace(self.ctx.db))
@@ -998,6 +1000,7 @@ class SettingsPage(Page):
     def save_behaviour(self) -> None:
         try:
             dashdata.set_autolock_minutes(self.ctx, self.autolock_var.get())
+            dashdata.set_relock_minutes(self.ctx, self.relock_var.get())
             dashdata.set_retention_days(self.ctx, self.retention_var.get())
         except ValueError as exc:
             self.beh_msg.configure(text=str(exc), foreground=P["bad"])

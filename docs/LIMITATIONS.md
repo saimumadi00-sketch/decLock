@@ -9,7 +9,7 @@ Read this before relying on it.
 | Threat | Why | What helps |
 |---|---|---|
 | **Killing the guard** (Task Manager, `taskkill`) | The guard runs as your Windows user, so anyone in your session has the same rights over it. | Day-to-day work in a **standard (non-admin) account**. Gatekeeper logs an `unclean_shutdown` at the next start, but cannot stop it. |
-| **Deleting or editing its data** (`%APPDATA%\Gatekeeper`) | Same reason: the files belong to your user. This also resets the password. | Standard account plus BitLocker. The audit chain and head seal detect edits, but someone with your rights can rewrite both. |
+| **Deleting or editing its data** (`%APPDATA%\Gatekeeper`) | Same reason: the files belong to your user. Deleting the folder no longer gives a fresh setup in the installed build (an admin-protected marker refuses it), but *editing* the database can still swap the password hash or the locked-app list. | Standard account plus BitLocker. The audit chain and head seal detect edits, but someone with your rights can rewrite both. |
 | **An administrator account** | Admins can stop services, edit the registry (undo the USB block), and take ownership of files. The uninstaller asks for the Gatekeeper password, but an admin can still kill the guard and delete `C:\Program Files\Gatekeeper` and the startup shortcut by hand. | Don't use an admin account day to day. Keep a separate admin account with a different password. |
 | **Safe Mode** | Windows starts without third-party startup items, so the guard never runs. | A BIOS/UEFI password and Windows account passwords on every account. |
 | **Booting from external media** (USB/Linux live disk) | The disk can be read without Windows running at all. | **BitLocker** (with a TPM + PIN), a **BIOS/UEFI password**, and boot order locked to the internal disk. |
@@ -34,6 +34,10 @@ Read this before relying on it.
 - Wrong passwords trigger a persistent, doubling lockout (30 s up to 15 min) that survives restarts.
 - The guard never leaves processes frozen on a clean exit, and `gatekeeper release` un-freezes them
   (it asks for the password while a guard is running, so it cannot be used to skip a prompt).
+- Once a Windows user has set a Gatekeeper password, deleting their data folder does not reopen first-run setup:
+  a marker in `C:\ProgramData\Gatekeeper\enrolled` (users can add, never delete) refuses it until an admin clears it.
+- Apps that are already open lock again when Windows locks and after the re-lock idle time (default 10 minutes).
+  They are frozen and held, never closed, so unsaved work survives a wrong or unanswered prompt.
 - The installed build ignores `GATEKEEPER_DATA_DIR`, so a planted environment variable cannot move the guard
   onto an empty folder (it is logged as `env_ignored`). Only `--data-dir` in the startup shortcut can.
 - Every blocked/denied/unlocked event is logged in a hash-chained audit log that is verified at startup

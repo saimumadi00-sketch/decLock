@@ -10,7 +10,7 @@ import queue
 
 from . import auth
 from .guard import Guard
-from .idle import IdleLocker
+from .idle import IdleLocker, Relocker, relock_minutes
 from .matcher import build_face_unlock
 from .usb import UsbPolicy, UsbWatcher
 
@@ -27,6 +27,9 @@ class GuardRuntime:
         self._busy = False   # a prompt is open (one at a time)
         self._engine = None  # FaceEngine, loaded on first use
         self._after = None   # the pending _pump timer
+        self.relocker = None  # locks open apps again when Windows locks or the user is idle
+        self._ticks = 0
+        self._session_locked = False
 
     # -- face engine (models load once, on first use) -----------------------------------------
     def engine(self):
@@ -45,6 +48,7 @@ class GuardRuntime:
         log.info("Guard running (%s).", "DEV: log only" if self.ctx.dev else "enforcing")
         self.guard = Guard(self.ctx, self._events.put)
         self.guard.start()
+        self.relocker = Relocker(self.guard, lambda: relock_minutes(self.ctx.db))
         self.usb_watcher = UsbWatcher(self.ctx, UsbPolicy(self.ctx))
         self.usb_watcher.start()
         self.running = True
@@ -83,19 +87,35 @@ class GuardRuntime:
         """Every 200 ms on the Tk thread: open the next queued prompt, if none is open."""
         if not self.running:
             return
+        self._ticks += 1
+        if self._ticks % 5 == 0:  # once a second
+            self._relock_tick()
         self._show_next()
         self._after = self.root.after(200, self._pump)
 
+    def _relock_tick(self) -> None:
+        """Re-lock open apps when needed, and re-ask for held ones once someone is back."""
+        try:
+            self._session_locked = self.relocker.locked_fn()
+            self.relocker.tick()
+            if not self._busy and self._events.empty() and self.guard.held() and self.relocker.may_ask():
+                self.relocker.asked()
+                self.guard.reprompt_held()
+        except Exception:  # e.g. no Windows APIs (tests on other systems): re-locking just stays off
+            log.debug("relock tick failed", exc_info=True)
+
     def _show_next(self) -> None:
-        if self._busy or self._events.empty():
-            return
+        if self._busy or self._events.empty() or self._session_locked:
+            return  # while Windows is locked nobody could answer, so prompts wait for the user
         from .ui import UnlockPrompt
         name = self._events.get()
         self._busy = True
         ctx = self.ctx
 
-        def done(allowed: bool) -> None:  # the prompt finished: resume or kill the app
+        def done(allowed: bool) -> None:  # the prompt finished: resume, kill, or (re-locked apps) keep holding
             self._busy = False
+            if not allowed and self.relocker:
+                self.relocker.asked()  # don't re-ask for a held app straight away
             self.guard.resolve(name, allowed)
 
         def face_result(face_state: str, score) -> None:  # log every face attempt with its best score
