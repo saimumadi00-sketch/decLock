@@ -34,6 +34,8 @@ Read this before relying on it.
 - Wrong passwords trigger a persistent, doubling lockout (30 s up to 15 min) that survives restarts.
 - The guard never leaves processes frozen on a clean exit, and `gatekeeper release` un-freezes them
   (it asks for the password while a guard is running, so it cannot be used to skip a prompt).
+- The installed build ignores `GATEKEEPER_DATA_DIR`, so a planted environment variable cannot move the guard
+  onto an empty folder (it is logged as `env_ignored`). Only `--data-dir` in the startup shortcut can.
 - Every blocked/denied/unlocked event is logged in a hash-chained audit log that is verified at startup
   and every few seconds while the dashboard is open. Deleting the `audit.head` seal is detected too.
 

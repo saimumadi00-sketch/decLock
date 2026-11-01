@@ -19,16 +19,39 @@ PROTECTED_PROCESSES = frozenset({
 })
 
 
-def data_dir(override=None, dev=False) -> Path:
+DATA_DIR_ENV = "GATEKEEPER_DATA_DIR"
+
+
+def env_data_dir(environ=None, frozen=None):
+    """$GATEKEEPER_DATA_DIR, or None. Ignored in an installed (frozen) build.
+
+    Any program running as the user can set this variable for the next logon (HKCU\\Environment).
+    If the installed guard obeyed it, it would start on an empty folder, show the "choose a
+    password" screen and lock nothing, so a stray or planted value could switch protection off.
+    Development checkouts keep honouring it; an installed copy only moves with --data-dir, which
+    sits in the admin-owned startup shortcut."""
+    environ = os.environ if environ is None else environ
+    frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
+    return None if frozen else (environ.get(DATA_DIR_ENV) or None)
+
+
+def data_dir_env_ignored(environ=None, frozen=None) -> bool:
+    """True when the variable is set but env_data_dir() refused it (worth an audit entry)."""
+    environ = os.environ if environ is None else environ
+    return bool(environ.get(DATA_DIR_ENV)) and env_data_dir(environ, frozen) is None
+
+
+def data_dir(override=None, dev=False, environ=None, frozen=None) -> Path:
     """Folder holding the database, key, seal and logs (created if missing).
 
-    Order: explicit --data-dir, then $GATEKEEPER_DATA_DIR, then %APPDATA%\\Gatekeeper.
-    Dev mode uses a separate directory so it never touches real settings."""
+    Order: explicit --data-dir, then $GATEKEEPER_DATA_DIR (development only, see env_data_dir),
+    then %APPDATA%\\Gatekeeper. Dev mode uses a separate directory so it never touches real settings."""
+    environ = os.environ if environ is None else environ
     if override:
         path = Path(override)
     else:
-        env = os.environ.get("GATEKEEPER_DATA_DIR")
-        base = Path(env) if env else Path(os.environ.get("APPDATA", Path.home())) / APP_NAME
+        env = env_data_dir(environ, frozen)
+        base = Path(env) if env else Path(environ.get("APPDATA", Path.home())) / APP_NAME
         path = base.with_name(base.name + "-dev") if dev and not env else base
     path.mkdir(parents=True, exist_ok=True)
     return path

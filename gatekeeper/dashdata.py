@@ -139,6 +139,7 @@ EVENT_LABELS = {
     "face_failed": "Face not recognised", "face_unavailable": "Face unavailable",
     "guard_start": "Protection started", "guard_stop": "Protection stopped",
     "unclean_shutdown": "Unclean shutdown", "tamper_detected": "Log tampering detected",
+    "env_ignored": "Data-folder override ignored",
     "usb_blocked": "USB storage blocked", "usb_allowed": "USB storage allowed",
     "usb_blocked_dev": "USB block (dev, simulated)", "usb_allowed_dev": "USB allow (dev, simulated)",
     "usb_storage_seen": "USB drive seen", "usb_policy_restored": "USB block restored",
@@ -157,7 +158,7 @@ GOOD = {"unlocked", "face_unlock", "guard_start", "password_set", "face_enrolled
         "usb_blocked", "app_added"}
 BAD = {"denied", "bad_password", "lockout", "tamper_detected", "face_failed", "enforce_failed",
        "usb_enforce_failed"}
-WARN = {"blocked", "unclean_shutdown", "usb_storage_seen", "usb_policy_restored", "face_unavailable",
+WARN = {"blocked", "unclean_shutdown", "env_ignored", "usb_storage_seen", "usb_policy_restored", "face_unavailable",
         "idle_lock_failed", "manual_lock_failed"}
 SEVERITY_EVENTS = {"good": GOOD, "bad": BAD, "warn": WARN}
 
