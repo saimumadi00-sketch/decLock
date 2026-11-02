@@ -8,16 +8,16 @@ Read this before relying on it.
 
 | Threat | Why | What helps |
 |---|---|---|
-| **Killing the guard** (Task Manager, `taskkill`) | The guard runs as your Windows user, so anyone in your session has the same rights over it. | Day-to-day work in a **standard (non-admin) account**. Gatekeeper logs an `unclean_shutdown` at the next start, but cannot stop it. |
+| **Killing the guard** (Task Manager, `taskkill`) | The guard runs as your Windows user, so anyone in your session can end or suspend it. In the installed build a SYSTEM watchdog (a scheduled task a standard user can't stop) starts it again within about 2 seconds (never more than 10, even if it is killed over and over) and resumes it if suspended. The restarted copy freezes locked apps that are open again and puts folder locks back. | Day-to-day work in a **standard (non-admin) account**: an administrator can stop the watchdog too. |
 | **Deleting or editing its data** (`%APPDATA%\Gatekeeper`) | Same reason: the files belong to your user. Deleting the folder no longer gives a fresh setup in the installed build (an admin-protected marker refuses it), but *editing* the database can still swap the password hash or the locked-app list. | Standard account plus BitLocker. The audit chain and head seal detect edits, but someone with your rights can rewrite both. |
 | **An administrator account** | Admins can stop services, edit the registry (undo the USB block), and take ownership of files. The uninstaller asks for the Gatekeeper password, but an admin can still kill the guard and delete `C:\Program Files\Gatekeeper` and the startup shortcut by hand. | Don't use an admin account day to day. Keep a separate admin account with a different password. |
 | **Safe Mode** | Windows starts without third-party startup items, so the guard never runs. | A BIOS/UEFI password and Windows account passwords on every account. |
 | **Booting from external media** (USB/Linux live disk) | The disk can be read without Windows running at all. | **BitLocker** (with a TPM + PIN), a **BIOS/UEFI password**, and boot order locked to the internal disk. |
-| **Starting an app faster than a scan** | Windows cannot block a process before it exists without a kernel driver. The guard suspends it within about 0.5 s. | Not preventable in user mode. |
+| **Starting an app faster than a scan** | Windows cannot block a process before it exists without a kernel driver. The guard suspends it within about 0.5 s, together with any helper processes it already started (whatever their names). | Not preventable in user mode. |
 | **Elevated or protected processes** | A non-admin guard cannot suspend them (`enforce_failed` is logged). | Run the guard elevated only if you accept the larger attack surface. |
 | **Masks, deepfakes, a lookalike** | Face unlock rejects photos and screens (MiniFASNet anti-spoofing) and asks for two random head movements a still image or recording can't follow. A realistic 3D mask, or a live deepfake that can follow instructions, might still pass; so might a close relative who looks very similar. | Raise the strictness, or turn face unlock off for apps that matter. The password is the real lock. |
 | **Editing a locked program's file** | Renamed or copied programs are recognised by their built-in original name and a SHA-256 fingerprint. Someone who edits the file itself (changing both its version information and its bytes) is not recognised. A program with no version information is only fingerprinted once it has run while locked, or was locked by browsing to its `.exe`. | Lock apps by browsing to their `.exe`; use a standard account. |
-| **Changing the time zone (lock schedules)** | Schedules use local time, and a standard user may change the time zone, which shifts "now" out of the lock window. | Leave schedules off (always locked) for apps that matter. |
+| **Daylight saving time (lock schedules)** | Schedules are pinned to the UTC offset they were saved with, so changing the time zone no longer moves them, but in countries with daylight saving a schedule runs an hour off until it is saved again. Schedules saved by older versions use local time until re-saved. | Save schedules again after a DST change, or leave them off for apps that matter. |
 | **Changing the system clock** | The brute-force lockout timer uses wall-clock time. | Standard account (changing the clock needs admin). |
 | **Already-mounted USB drives; network, cloud, email, Bluetooth** | The block disables the storage driver for new devices only. | Out of scope for this tool. |
 
@@ -55,8 +55,8 @@ locked; lock a folder inside them instead.
   register that way are not detected).
 - USB blocking covers USBSTOR, UASPStor (fast USB 3 drives) and the removable-storage policy (phones,
   card readers, CD/DVD; this one can need a sign-out to apply). A password-approved temporary allow
-  blocks again by itself, backed by a one-shot SYSTEM scheduled task. If the block is turned off
-  while Gatekeeper isn't running as Administrator it can't repair it, but the dashboard shows it in red.
+  blocks again by itself, backed by a one-shot SYSTEM scheduled task. If the block is turned off, the
+  SYSTEM watchdog puts it back within seconds (the dashboard also shows it in red until then).
 - Uninstalling needs the Gatekeeper password of every Windows user who set it up.
 - The activity log is checkpointed about once an hour into the add-only ProgramData folder. Rewriting
   or deleting checkpointed entries fails the log check, even if every hash is recomputed. The only
@@ -66,7 +66,16 @@ locked; lock a folder inside them instead.
 - Every blocked/denied/unlocked event is logged in a hash-chained audit log that is verified at startup
   and every few seconds while the dashboard is open. Deleting the `audit.head` seal is detected too.
 
-## Possible future hardening (not implemented)
+## The watchdog
 
-A Windows service running as SYSTEM, with a small agent in the user session for the prompt, would
-make the guard much harder to stop from a standard account. It is a larger redesign.
+The installed build registers a scheduled task, "Gatekeeper watchdog", that runs as SYSTEM from
+boot. It restarts each signed-in user's Gatekeeper (only for users who set it up), resumes it if it
+was suspended, and puts the USB block back if a user wants it and it was turned off. It only ever
+blocks USB; allowing still needs an administrator. An administrator can stop or delete the task.
+Its log is `C:\ProgramData\Gatekeeper\watchdog.log`.
+
+## Supply chain
+
+`build.ps1` installs exact versions with `pip --require-hashes` from `requirements.lock`, so a
+changed or unexpected package can't slip into a build. The face models are SHA-256 pinned. The
+InsightFace face models are licensed for non-commercial research use only (see THIRD_PARTY_NOTICES.txt).

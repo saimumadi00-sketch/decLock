@@ -56,6 +56,7 @@ class GuardRuntime:
         self.usb_watcher = UsbWatcher(self.ctx, UsbPolicy(self.ctx))
         self.usb_watcher.start()
         self.running = True
+        self._folder_background(self.folders.enforce)  # a lock removed while we weren't running goes back now
         self.apply_idle_setting()
         self._pump()
 

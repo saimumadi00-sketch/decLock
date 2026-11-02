@@ -60,6 +60,9 @@ Name: "{group}\{#AppName} command prompt"; Filename: "{cmd}"; Parameters: "/k ""
 ; file's permissions. So a standard user can record "I set Gatekeeper up" but never remove that record.
 Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\{#AppName}\enrolled"" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F *S-1-5-32-545:(RD,X,RA,REA,RC,S,WD) *S-1-5-32-545:(OI)(IO)R *S-1-3-4:(OI)(IO)R"; \
   Flags: runhidden waituntilterminated; StatusMsg: "Securing the enrolment folder..."
+; The SYSTEM watchdog that restarts Gatekeeper if it is ended (see gatekeeper/watchdog.py).
+Filename: "{app}\gatekeeper.exe"; Parameters: "install-watchdog"; \
+  Flags: runhidden waituntilterminated; StatusMsg: "Starting the Gatekeeper watchdog..."
 ; First launch shows the "choose a password" screen inside the app.
 Filename: "{app}\gatekeeperw.exe"; Parameters: "--service gui"; Description: "Open Gatekeeper now"; \
   Flags: postinstall nowait runasoriginaluser skipifsilent
@@ -69,8 +72,10 @@ Filename: "{app}\gatekeeperw.exe"; Parameters: "--service gui"; Description: "Op
 Type: filesandordirs; Name: "{commonappdata}\{#AppName}"
 
 [UninstallRun]
-; Stop the guard, un-freeze anything it left suspended, and undo the USB block so the
+; Stop the watchdog FIRST (otherwise it restarts the guard), then the guard, un-freeze anything it left suspended, and undo the USB block so the
 ; machine is not left with a policy and no tool to manage it.
+Filename: "{sys}\schtasks.exe"; Parameters: "/End /TN ""Gatekeeper watchdog"""; Flags: runhidden; RunOnceId: "StopWatchdog"
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""Gatekeeper watchdog"" /F"; Flags: runhidden; RunOnceId: "RemoveWatchdog"
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM gatekeeperw.exe"; Flags: runhidden; RunOnceId: "StopGuard"
 Filename: "{app}\gatekeeper.exe"; Parameters: "release"; Flags: runhidden; RunOnceId: "ReleaseApps"
 ; Unlock every user's locked folders, or they would stay inaccessible with no Gatekeeper to open them.
@@ -88,7 +93,8 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ResultCode: Integer;
 begin
-  { Upgrade case: stop a running guard so its files can be replaced. }
+  { Upgrade case: stop the watchdog first (it would restart the guard), then the guard, so files can be replaced. }
+  Exec(ExpandConstant('{sys}\schtasks.exe'), '/End /TN "Gatekeeper watchdog"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM gatekeeperw.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Result := '';
 end;

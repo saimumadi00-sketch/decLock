@@ -32,12 +32,14 @@ How it behaves:
 
 - **The guard and the dashboard are one program.** Locked apps stay protected whether or not you are logged in
   to the window; the password only gates *managing* Gatekeeper.
-- **The X button minimizes and locks the window.** Protection keeps running. To really stop Gatekeeper use
-  **Quit Gatekeeper** (needs your password). Pausing protection, removing a locked app, resetting the log and deleting face data also ask for it.
+- **The X button minimizes and locks the window.** Protection keeps running. The installed copy can't be quit:
+  a SYSTEM watchdog starts it again within seconds if it is ended (even from Task Manager), so **Quit** offers
+  **Pause protection** instead (needs your password; it resumes when you press Resume or next sign in). Run from
+  source, Quit works as before (password). Pausing protection, removing a locked app, resetting the log and deleting face data also ask for it.
 - **The unlock prompt is a Face ID style overlay.** When a locked app starts, the whole screen is blurred and dimmed, and a card fades in over it with the face animation (scan, then a checkmark on success, or a shake on failure). Everything fades in and out. If the screen can't be captured it falls back to a plain dark backdrop.
 - **The window locks itself** after 5 idle minutes (change it in Settings). A wrong-password lockout counts down live on the login screen.
 - **Tray icon (optional).** With `pystray` and `Pillow` installed, Gatekeeper shows a tray icon (Open, Pause/Resume, Lock, Quit) and the X button hides the window to the tray.
-- **Shortcuts:** Ctrl+L locks the dashboard; Ctrl+1 to Ctrl+6 switch pages.
+- **Shortcuts:** Ctrl+L locks the dashboard; Ctrl+1 to Ctrl+7 switch pages.
 - **A red banner** appears on every page if the audit log fails its integrity check.
 - **USB changes need Administrator.** If Gatekeeper is not elevated it offers to restart itself as Administrator
   (UAC prompt). Note: elevating with a *different* Windows account would use that account's data folder, so

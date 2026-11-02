@@ -1,0 +1,5 @@
+# Everything needed to test and build the Windows .exe. build.ps1 installs the pinned, hash-checked
+# versions from requirements.lock, generated from this file with:
+#   uv pip compile requirements-build.txt --python-platform x86_64-pc-windows-msvc --python-version 3.12 --generate-hashes -o requirements.lock
+-r requirements.txt
+pyinstaller>=6.0
