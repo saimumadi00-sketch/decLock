@@ -119,6 +119,10 @@ class Guard:
             queue = self._pending.setdefault(name, [])
             first = not queue  # only the first frozen instance opens a prompt; the rest wait with it
             queue.append(proc)
+            # Helpers it already started in the moment before this scan (often under other names, e.g.
+            # a launcher's game or a browser's renderers) are frozen with it, and resumed or closed
+            # with it too.
+            queue.extend(self._freeze_children(proc))
             soft = self._relocking or name in self._soft
             if soft:
                 self._soft.add(name)
@@ -128,6 +132,24 @@ class Guard:
             self.ctx.audit.record("relocked", f"{name} (open app frozen until unlocked)")
         if first and not soft:
             self.on_locked(name)  # held (re-locked) apps are prompted for when the user is back: reprompt_held()
+
+    def _freeze_children(self, proc: psutil.Process) -> list:
+        frozen = []
+        try:
+            children = proc.children(recursive=True)
+        except psutil.Error:
+            return frozen
+        for child in children:
+            key = self._key(child)
+            if key in self._seen:
+                continue  # already handled on its own
+            try:
+                child.suspend()
+            except psutil.Error:
+                continue
+            self._seen.add(key)
+            frozen.append(child)
+        return frozen
 
     # -- decisions ----------------------------------------------------------
     def relock(self, reason: str) -> None:
@@ -208,8 +230,23 @@ class Guard:
 
     # -- thread -------------------------------------------------------------
     def start(self) -> None:
+        self._unfreeze_leftovers()
         self._thread = threading.Thread(target=self._loop, name="guard", daemon=True)
         self._thread.start()
+
+    def _unfreeze_leftovers(self) -> None:
+        """A previous copy that was killed (and restarted by the watchdog) leaves locked apps frozen.
+        Windows counts freezes, so freezing them again would need TWO unlocks to resume. Resume them
+        once here; the first scan, a moment later, freezes them again and asks for the password."""
+        if self.ctx.dev:
+            return
+        apps = set(self.ctx.db.list_apps())
+        for proc in psutil.process_iter(["name", "status"]):
+            try:
+                if proc.info["status"] == psutil.STATUS_STOPPED and (proc.info["name"] or "").lower() in apps:
+                    proc.resume()
+            except psutil.Error:
+                continue
 
     def _loop(self) -> None:
         while not self._stop.is_set():

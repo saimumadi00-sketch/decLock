@@ -360,10 +360,23 @@ COMMANDS = {"init": cmd_init, "add": cmd_add, "remove": cmd_remove, "list": cmd_
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if "confirm-uninstall" in argv:  # hidden: only the uninstaller calls it
+    # Hidden commands (installer, uninstaller, scheduled task): only as the first word after the
+    # options, so e.g. `gatekeeper add watchdog` still means "lock an app called watchdog".
+    hidden = next((a for a in argv if not a.startswith("-")), "")
+    if hidden == "confirm-uninstall":
         return confirm_uninstall_main()
-    if "release-folders" in argv:  # hidden: only the uninstaller calls it
+    if hidden == "release-folders":
         return release_folders_main()
+    if hidden == "watchdog":  # the SYSTEM scheduled task runs it (it refuses to run as anyone else)
+        from .watchdog import main as watchdog_main
+        return watchdog_main()
+    if hidden in ("install-watchdog", "remove-watchdog"):
+        from . import winapi
+        from .watchdog import install_task, remove_task
+        if not winapi.is_admin():
+            print("This needs Administrator rights (the installer runs it).")
+            return 1
+        return 0 if (install_task() if hidden == "install-watchdog" else remove_task()) else 1
     parser = argparse.ArgumentParser(prog="gatekeeper")
     parser.add_argument("--dev", action="store_true", help="log only; never kill, block or lock")
     parser.add_argument("--service", action="store_true", help=argparse.SUPPRESS)  # set by the installer

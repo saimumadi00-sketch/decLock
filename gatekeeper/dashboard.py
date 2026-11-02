@@ -74,7 +74,24 @@ class Dashboard:
             page.leave()
         self.runtime.stop()
 
+    @property
+    def managed(self) -> bool:
+        """The installed copy, kept running by the SYSTEM watchdog: closing it would only restart it."""
+        import sys
+        return bool(getattr(sys, "frozen", False)) and "--service" in (self.relaunch_args or [])
+
     def quit_app(self) -> None:
+        if self.managed:
+            # The watchdog would start Gatekeeper again within seconds, so quitting would only drop
+            # protection for that moment. Pausing (password) is the honest way to switch it off.
+            if messagebox.askyesno(
+                    "Gatekeeper keeps running",
+                    "Gatekeeper restarts itself if it is closed, so it can't be quit.\n\n"
+                    "Pause protection instead? (Needs your password. It resumes when you press Resume, "
+                    "or the next time you sign in.)", parent=self.root):
+                if self.runtime.running:
+                    self.toggle_protection()
+            return
         if not messagebox.askyesno("Quit Gatekeeper", "Quit Gatekeeper? Your locked apps will no longer be protected.",
                                    parent=self.root):
             return

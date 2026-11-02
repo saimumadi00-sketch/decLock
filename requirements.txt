@@ -1,7 +1,7 @@
 bcrypt>=4.0
 psutil>=5.9
 cryptography>=41.0
-opencv-python>=4.8
+opencv-python>=4.8,<5   # the face code is built and tested against OpenCV 4
 onnxruntime>=1.16   # runs the face models (SCRFD, ArcFace, MiniFASNet)
 numpy>=1.24
 pytest>=7.0

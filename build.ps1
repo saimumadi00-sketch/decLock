@@ -1,6 +1,9 @@
 # Build the executables and, if Inno Setup is installed, the installer.
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
+# Exact, hash-checked versions only: a tampered or unexpected package version can't slip into the build.
+python -m pip install --require-hashes -r requirements.lock
+if ($LASTEXITCODE -ne 0) { throw "Installing the pinned dependencies failed." }
 python -m pytest -q
 if ($LASTEXITCODE -ne 0) { throw "Tests failed; not building." }
 python -m PyInstaller --noconfirm --clean gatekeeper.spec
