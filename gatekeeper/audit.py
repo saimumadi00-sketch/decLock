@@ -36,6 +36,7 @@ def _csv_safe(value: str) -> str:
 class AuditLog:
     def __init__(self, db: Database, seal_path: Path = None):
         self.db, self.seal_path = db, seal_path
+        self.witness = None  # logwitness.LogWitness: checkpoints the user can't delete (installed build)
         # Verification cache: (data_version, total_changes, last_id, last_hash) of the last chain that
         # verified. It lets the dashboard re-check the log every few seconds by hashing only new rows.
         self._verified = None
@@ -104,6 +105,10 @@ class AuditLog:
             # A seal older than the newest row is fine (crash between insert and seal write).
             if row is None or row["hash"] != seal_hash:
                 return False, TAIL
+        if self.witness is not None:
+            ok, why = self.witness.verify(self.db)
+            if not ok:
+                return False, f"history ({why})"
         return True, None
 
     def prune(self, days: int) -> int:
@@ -136,6 +141,8 @@ class AuditLog:
 
     def reset(self) -> None:
         """Start a fresh chain (used after a tamper alarm, once the old log has been exported)."""
+        if self.witness is not None:
+            self.witness.mark_reset()  # permanent: old checkpoints stop counting from here
         with self.db.lock, self.db.conn:
             self.db.conn.execute("DELETE FROM audit_log")
             self.db.set_setting("audit_anchor", GENESIS)

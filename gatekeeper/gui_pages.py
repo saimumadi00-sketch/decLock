@@ -8,6 +8,7 @@ Every page is a ttk.Frame subclass of Page with three hooks the Dashboard calls:
 """
 
 import os
+import threading
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -261,8 +262,9 @@ class DashboardPage(Page):
         values = {
             "apps": (str(len(apps)), "none yet" if not apps else apps[0] + (f" +{len(apps) - 1} more" if len(apps) > 1 else ""),
                      P["good"] if apps else P["warn"]),
-            "usb": (usb.capitalize(), "Wanted: " + ("blocked" if s["usb_wanted"] else "allowed"),
-                    P["good"] if usb == "blocked" else P["muted"]),
+            "usb": ((usb.capitalize(), "Block was turned off!", P["bad"]) if s.get("usb_alert") else
+                    (usb.capitalize(), "Wanted: " + ("blocked" if s["usb_wanted"] else "allowed"),
+                     P["good"] if usb == "blocked" else P["muted"])),
             "idle": ("Off" if s["idle_minutes"] == 0 else f"{s['idle_minutes']:g} min", "Windows auto-lock",
                      P["muted"] if s["idle_minutes"] == 0 else P["good"]),
             "face": ("On" if s["face_enabled"] else "Off",
@@ -479,6 +481,110 @@ class AppsPage(Page):
 
 
 # --------------------------------------------------------------------------------------------
+class FoldersPage(Page):
+    title = "Locked folders"
+
+    def build(self) -> None:
+        self._job = None  # (thread, result holder) of the running icacls job
+        outer, body = make_card(self, "Lock a folder")
+        outer.pack(fill="x")
+        row = ttk.Frame(body, style="Card.TFrame")
+        row.pack(anchor="w")
+        self.add_btn = ttk.Button(row, text="Choose a folder to lock...", style="Accent.TButton", command=self.browse)
+        self.add_btn.pack(side="left")
+        self.msg = ttk.Label(body, style="CardMuted.TLabel", wraplength=700)
+        self.msg.pack(anchor="w", pady=(8, 0))
+        ttk.Label(body, style="CardMuted.TLabel", wraplength=700, text=(
+            "A locked folder can't be opened, read, changed or deleted by any program until you unlock it here. "
+            "Unlocked folders lock again when Windows locks or the PC is idle, and stay locked while Gatekeeper is "
+            "closed. Locking a big folder can take a minute.")).pack(anchor="w", pady=(4, 0))
+
+        outer, body = make_card(self, "Folders")
+        outer.pack(fill="both", expand=True, pady=(12, 0))
+        frame, self.tree = make_tree(body, [("path", "Folder", 520, True), ("state", "State", 110, False)],
+                                     height=9, empty="No folders locked yet.")
+        frame.pack(fill="both", expand=True)
+        row = ttk.Frame(body, style="Card.TFrame")
+        row.pack(anchor="e", pady=(8, 0))
+        self.buttons = [
+            ttk.Button(row, text="Unlock", command=lambda: self._selected(lambda f, p: f.set_locked(p, False), "Unlocked")),
+            ttk.Button(row, text="Lock now", command=lambda: self._selected(lambda f, p: f.set_locked(p, True), "Locked")),
+            ttk.Button(row, text="Stop protecting", command=self.remove_selected)]
+        for i, b in enumerate(self.buttons):
+            b.pack(side="left", padx=(6 if i else 0, 0))
+
+    def _folders(self):
+        from .folders import FolderLocker
+        return getattr(self.app.runtime, "folders", None) or FolderLocker(self.ctx)
+
+    def refresh(self) -> None:
+        self.tree.delete(*self.tree.get_children())
+        rows = self._folders().status()
+        for path, state in rows:
+            self.tree.insert("", "end", iid=path, values=(path, state.capitalize()),
+                             tags=("good" if state == "locked" else "warn",))
+        set_empty(self.tree, not rows)
+
+    def _say(self, text: str, error: bool = False) -> None:
+        self.msg.configure(text=text, foreground=P["bad"] if error else P["good"])
+
+    def _run(self, work, done_text: str) -> None:
+        """Run an icacls job on a thread; poll it from Tk so the window stays responsive."""
+        if self._job is not None:
+            return
+        result = {}
+
+        def target():
+            try:
+                result["value"] = work()
+            except Exception as exc:  # ValueError (refused) or OSError (icacls failed)
+                result["error"] = exc
+        thread = threading.Thread(target=target, name="folder-ui", daemon=True)
+        self._job = thread
+        for b in self.buttons + [self.add_btn]:
+            b.state(["disabled"])
+        self._say("Working... (big folders take a while)")
+        thread.start()
+
+        def poll():
+            if thread.is_alive():
+                self.after(200, poll)
+                return
+            self._job = None
+            for b in self.buttons + [self.add_btn]:
+                b.state(["!disabled"])
+            if "error" in result:
+                self._say(str(result["error"]), True)
+            else:
+                suffix = " (dev mode: simulated, permissions untouched)" if self.ctx.dev else ""
+                self._say(done_text + suffix)
+            self.refresh()
+        self.after(200, poll)
+
+    def browse(self) -> None:
+        path = filedialog.askdirectory(parent=self, title="Choose a folder to lock", mustexist=True)
+        if path:
+            self._run(lambda: self._folders().add(path), f"Locked {path}.")
+
+    def _selected(self, action, verb: str) -> None:
+        selection = self.tree.selection()
+        if not selection:
+            self._say("Select a folder in the list first.", True)
+            return
+        path = selection[0]
+        self._run(lambda: action(self._folders(), path), f"{verb}: {path}")
+
+    def remove_selected(self) -> None:
+        selection = self.tree.selection()
+        if not selection:
+            self._say("Select a folder in the list first.", True)
+            return
+        path = selection[0]
+        if messagebox.askyesno("Stop protecting", f"Unlock and stop protecting this folder?\n\n{path}", parent=self):
+            self._run(lambda: self._folders().remove(path), f"No longer protected: {path}")
+
+
+# --------------------------------------------------------------------------------------------
 class UsbIdlePage(Page):
     title = "USB and idle lock"
 
@@ -492,11 +598,24 @@ class UsbIdlePage(Page):
         row.pack(anchor="w")
         ttk.Button(row, text="Block USB storage", style="Accent.TButton", command=lambda: self.set_usb(True)).pack(side="left")
         ttk.Button(row, text="Allow USB storage", command=lambda: self.set_usb(False)).pack(side="left", padx=6)
+        # Password-protected temporary use of a pen drive: the block comes back by itself.
+        row = ttk.Frame(body, style="Card.TFrame")
+        row.pack(anchor="w", pady=(8, 0))
+        ttk.Label(row, text="Need a pen drive? Allow it for", style="Card.TLabel").pack(side="left")
+        self.temp_var = tk.StringVar(value="15")
+        ttk.Spinbox(row, from_=1, to=240, width=5, textvariable=self.temp_var).pack(side="left", padx=6)
+        ttk.Label(row, text="minutes", style="Card.TLabel").pack(side="left")
+        ttk.Button(row, text="Allow temporarily", command=self.allow_temporarily).pack(side="left", padx=10)
+        self.temp_info = tk.StringVar()
+        ttk.Label(body, textvariable=self.temp_info, style="CardMuted.TLabel").pack(anchor="w", pady=(4, 0))
+        self.usb_alert = ttk.Label(body, style="Err.TLabel", wraplength=700)
+        self.usb_alert.pack(anchor="w")
         self.usb_msg = ttk.Label(body, style="CardMuted.TLabel", wraplength=700)
         self.usb_msg.pack(anchor="w", pady=(8, 0))
         ttk.Label(body, style="CardMuted.TLabel", wraplength=700, text=(
-            "Blocking stops new pen drives and external disks from mounting. Keyboards, mice and drives that are already "
-            "plugged in keep working. Changing this needs Administrator rights.")).pack(anchor="w", pady=(4, 0))
+            "Blocking stops new pen drives, external disks (including fast USB 3 drives), phones and card readers "
+            "from being used. Keyboards, mice and drives that are already plugged in keep working. Changing this "
+            "needs Administrator rights.")).pack(anchor="w", pady=(4, 0))
 
         outer, body = make_card(self, "Idle lock")
         outer.pack(fill="x", pady=(12, 0))
@@ -517,6 +636,9 @@ class UsbIdlePage(Page):
     def refresh(self) -> None:
         status = dashdata.usb_status(self.ctx)
         self.usb_var.set(f"USB storage is currently: {status.upper()}")
+        remaining = dashdata.usb_temporary_remaining(self.ctx)
+        self.temp_info.set(f"Temporarily allowed: blocks again in {int(remaining // 60) + 1} min." if remaining else "")
+        self.usb_alert.configure(text=dashdata.usb_alert(self.ctx))
         self.admin_var.set("Gatekeeper is running as Administrator." if winapi.is_admin()
                            else "Gatekeeper is not running as Administrator (needed to change this).")
         self.idle_var.set(f"{float(self.ctx.db.get_setting('idle_lock_minutes', 0)):g}")
@@ -545,6 +667,29 @@ class UsbIdlePage(Page):
         self._say(self.usb_msg, ("USB storage blocked." if block else "USB storage allowed.") + suffix)
         self.refresh()
 
+    def allow_temporarily(self) -> None:
+        from .usb import UsbPolicy
+        if not self.app.confirm_password("allow USB storage temporarily"):
+            return
+        try:
+            minutes = UsbPolicy(self.ctx).allow_temporarily(self.temp_var.get())
+        except ValueError as exc:
+            self._say(self.usb_msg, str(exc), True)
+            return
+        except PermissionError:
+            if messagebox.askyesno(
+                    "Administrator needed",
+                    "Allowing USB storage needs Administrator rights.\n\n"
+                    "Restart Gatekeeper as Administrator now? Protection restarts with it.", parent=self):
+                self.app.relaunch_elevated()
+            return
+        except Exception as exc:
+            self._say(self.usb_msg, f"Could not change USB storage: {exc}", True)
+            return
+        suffix = " (dev mode: simulated, registry untouched)" if self.ctx.dev else ""
+        self._say(self.usb_msg, f"USB storage allowed for {minutes:g} minutes, then blocked again.{suffix}")
+        self.refresh()
+
     def apply_idle(self) -> None:
         try:
             minutes = dashdata.set_idle_minutes(self.ctx, self.idle_var.get())
@@ -567,7 +712,13 @@ class FacePage(Page):
             "Face unlock checks that the face is real (photos and screens are rejected) and asks for two random head "
             "movements. It is still not as strong as your password: a realistic mask or a skilled deepfake could "
             "get through.")).pack(fill="x", pady=(0, 12))
-        cols = ttk.Frame(self)
+        # Shown only when software cameras are installed (they could feed a deepfake to the check).
+        self.cam_warn = ttk.Frame(self)
+        self.cam_text = tk.StringVar()
+        ttk.Label(self.cam_warn, textvariable=self.cam_text, style="Warn.TLabel", wraplength=600,
+                  justify="left").pack(side="left", fill="x", expand=True)
+        ttk.Button(self.cam_warn, text="It's my real camera", command=self.allow_cameras).pack(side="left", padx=8)
+        self._cam_anchor = cols = ttk.Frame(self)
         cols.pack(fill="both", expand=True)
         cols.columnconfigure(0, weight=3)
         cols.columnconfigure(1, weight=2)
@@ -632,6 +783,17 @@ class FacePage(Page):
             self.samples_info.set("Face unlock was upgraded: enroll again to use it")
         else:
             self.samples_info.set(f"{count} face sample(s) enrolled")
+        paused = dashdata.face_pause_remaining(self.ctx.db)
+        if paused > 0:
+            self.samples_info.set(self.samples_info.get() + f"\nPaused {int(paused // 60) + 1} min after failed tries "
+                                  "(your password ends it)")
+        cameras = dashdata.blocking_cameras(self.ctx.db)
+        if cameras:
+            self.cam_text.set("Face unlock is OFF: camera software that can fake a webcam is installed ("
+                              + ", ".join(cameras) + "). Uninstall it, or confirm it is your real camera.")
+            self.cam_warn.pack(fill="x", pady=(0, 12), before=self._cam_anchor)
+        else:
+            self.cam_warn.pack_forget()
         self.enabled_var.set(enabled)
         self.thr_var.set(threshold)
         self.timeout_var.set(timeout)
@@ -641,6 +803,14 @@ class FacePage(Page):
 
     def _say(self, text: str, error: bool = False) -> None:
         self.msg.configure(text=text, foreground=P["bad"] if error else P["good"])
+
+    def allow_cameras(self) -> None:
+        cameras = dashdata.blocking_cameras(self.ctx.db)
+        if cameras and messagebox.askyesno("Allow camera", "Only continue if these are your real webcam:\n\n"
+                                           + "\n".join(cameras) + "\n\nA fake camera lets a video of you unlock apps.",
+                                           parent=self):
+            dashdata.allow_cameras(self.ctx, cameras)
+            self.refresh()
 
     def save(self) -> None:
         try:
@@ -941,9 +1111,10 @@ class SettingsPage(Page):
         # -- behaviour: auto-lock, retention, theme, password grace -----------------------------
         outer, body = make_card(self, "Behaviour")
         outer.pack(fill="x", pady=(12, 0))
-        self.autolock_var, self.retention_var = tk.StringVar(), tk.StringVar()
+        self.autolock_var, self.retention_var, self.relock_var = tk.StringVar(), tk.StringVar(), tk.StringVar()
         for label, var, high, hint in (
                 ("Lock this window after", self.autolock_var, 240, "idle minutes (0 = never)"),
+                ("Re-lock open apps after", self.relock_var, 240, "idle minutes (0 = only when Windows locks)"),
                 ("Keep activity log for", self.retention_var, 3650, "days (0 = forever)")):
             row = ttk.Frame(body, style="Card.TFrame")
             row.pack(fill="x", pady=3)
@@ -981,6 +1152,7 @@ class SettingsPage(Page):
 
     def refresh(self) -> None:
         self.autolock_var.set(f"{dashdata.autolock_minutes(self.ctx.db):g}")
+        self.relock_var.set(f"{dashdata.relock_minutes(self.ctx.db):g}")
         self.retention_var.set(str(int(self.ctx.db.get_setting("log_retention_days", 90))))
         self.theme_var.set(dashdata.get_theme(self.ctx.db).capitalize())
         self.grace_var.set(dashdata.confirm_grace(self.ctx.db))
@@ -998,6 +1170,7 @@ class SettingsPage(Page):
     def save_behaviour(self) -> None:
         try:
             dashdata.set_autolock_minutes(self.ctx, self.autolock_var.get())
+            dashdata.set_relock_minutes(self.ctx, self.relock_var.get())
             dashdata.set_retention_days(self.ctx, self.retention_var.get())
         except ValueError as exc:
             self.beh_msg.configure(text=str(exc), foreground=P["bad"])
@@ -1022,7 +1195,7 @@ class SettingsPage(Page):
         messagebox.showinfo("Released", f"Resumed {release_suspended(self.ctx)} frozen process(es).", parent=self)
 
 
-# Sidebar order; Ctrl+1..Ctrl+6 follow it too. (key, sidebar label, page class)
+# Sidebar order; Ctrl+1..Ctrl+7 follow it too. (key, sidebar label, page class)
 PAGES = [("dashboard", "Dashboard", DashboardPage), ("apps", "Locked apps", AppsPage),
-         ("usb", "USB and idle lock", UsbIdlePage), ("face", "Face unlock", FacePage),
-         ("log", "Activity log", LogPage), ("settings", "Settings", SettingsPage)]
+         ("folders", "Locked folders", FoldersPage), ("usb", "USB and idle lock", UsbIdlePage),
+         ("face", "Face unlock", FacePage), ("log", "Activity log", LogPage), ("settings", "Settings", SettingsPage)]

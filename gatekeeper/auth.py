@@ -46,6 +46,7 @@ def check_password(db: Database, password: str, audit=None, clock=time.time) -> 
     if verify_password(db, password):
         db.set_setting("fail_count", 0)
         db.set_setting("locked_until", 0)
+        face_reset(db)  # the owner is back: face unlock may be tried again
         return True
     failures = int(db.get_setting("fail_count", 0)) + 1
     db.set_setting("fail_count", failures)
@@ -66,3 +67,32 @@ def verify_password(db: Database, password: str) -> bool:
         return bcrypt.checkpw(_prep(password), stored.encode("ascii"))
     except ValueError:  # corrupted hash: fail closed
         return False
+
+
+# -- face unlock throttling ---------------------------------------------------------------------
+# Face attempts used to be unlimited (and allowed during a password lockout), so a lookalike could
+# keep retrying by reopening the app. Now a run of failed face attempts switches face unlock off
+# for a while; the correct password switches it back on at once.
+FACE_FREE_FAILURES = 5   # failed face attempts (a face was seen but not accepted) before a pause
+FACE_LOCK = 15 * 60      # seconds face unlock stays off after that
+
+
+def face_locked_remaining(db, clock=time.time) -> float:
+    """Seconds until face unlock may be tried again (0 = allowed)."""
+    return max(0.0, float(db.get_setting("face_locked_until", 0)) - clock())
+
+
+def face_failed(db, audit=None, clock=time.time) -> None:
+    """Count one failed face attempt; after FACE_FREE_FAILURES, pause face unlock."""
+    failures = int(db.get_setting("face_fail_count", 0)) + 1
+    db.set_setting("face_fail_count", failures)
+    if failures >= FACE_FREE_FAILURES:
+        db.set_setting("face_fail_count", 0)
+        db.set_setting("face_locked_until", clock() + FACE_LOCK)
+        if audit:
+            audit.record("face_lockout", f"{failures} failed face attempts, face unlock off for {FACE_LOCK // 60} min")
+
+
+def face_reset(db) -> None:
+    db.set_setting("face_fail_count", 0)
+    db.set_setting("face_locked_until", 0)

@@ -2,8 +2,12 @@
 
 The uninstaller runs elevated, and Inno Setup cannot run a program as the original (non-admin)
 user during uninstall. So the check cannot rely on %APPDATA% pointing at the right profile: it
-looks for a Gatekeeper data folder in every Windows profile and accepts the password of any
-user who set one. If nobody set a password, there is nothing to protect and uninstall is allowed.
+looks for a Gatekeeper data folder in every Windows profile.
+
+Uninstalling removes protection for EVERY user on the PC, so it needs the Gatekeeper password of
+every user who set one (one prompt per user). Accepting any one of them would let a second user
+set up their own Gatekeeper, then use that password to remove everyone's protection.
+If nobody set a password, there is nothing to protect and uninstall is allowed.
 """
 
 import os
@@ -30,52 +34,68 @@ def candidate_dirs(own: Path = None, users_root: Path = None) -> list:
     return unique
 
 
+def _owner(directory: Path) -> str:
+    """The Windows user a data folder belongs to: ...\\Users\\<name>\\AppData\\Roaming\\Gatekeeper."""
+    parts = Path(directory).parts
+    try:
+        return parts[-4]
+    except IndexError:
+        return "this user"
+
+
+class UserGate:
+    """One protected user's password check (what each uninstall prompt verifies against)."""
+
+    def __init__(self, owner: str, db, audit):
+        self.owner, self.db, self.audit = owner, db, audit
+
+    def verify(self, password: str) -> bool:
+        return auth.check_password(self.db, password, self.audit)  # shares that user's lockout
+
+    def lockout(self) -> float:
+        return auth.lockout_remaining(self.db)
+
+    def record(self, event: str, detail: str = "") -> None:
+        self.audit.record(event, detail)
+
+
 class UninstallGate:
-    """Checks a password against every protected Gatekeeper install found on this PC."""
+    """Every protected Gatekeeper install found on this PC."""
 
     def __init__(self, dirs):
-        self.stores = []  # (db, audit) for each folder whose owner set a password
+        self.users = []  # UserGate for each folder whose owner set a password
+        self._open = []
         for d in dirs:
             db = Database(d / DB_NAME)
+            self._open.append(db)
             if auth.has_password(db):
-                self.stores.append((db, AuditLog(db, d / "audit.head")))
-            else:
-                db.close()
+                self.users.append(UserGate(_owner(d), db, AuditLog(db, d / "audit.head")))
 
     @property
     def protected(self) -> bool:
-        return bool(self.stores)
-
-    def lockout(self) -> float:
-        """Seconds to wait: only while EVERY store is locked out (any open one may be tried)."""
-        return min((auth.lockout_remaining(db) for db, _ in self.stores), default=0.0)
-
-    def verify(self, password: str) -> bool:
-        open_stores = [(db, a) for db, a in self.stores if auth.lockout_remaining(db) <= 0]
-        for db, audit in open_stores:
-            if auth.verify_password(db, password):
-                return auth.check_password(db, password, audit)  # resets that store's failure count
-        for db, audit in open_stores:  # wrong for everyone: count the failure everywhere (throttling)
-            auth.check_password(db, password, audit)
-        return False
+        return bool(self.users)
 
     def record(self, event: str, detail: str = "") -> None:
-        for _, audit in self.stores:
-            audit.record(event, detail)
+        for user in self.users:
+            user.record(event, detail)
 
     def close(self) -> None:
-        for db, _ in self.stores:
+        for db in self._open:
             db.close()
 
 
 def confirm_uninstall(ask) -> bool:
-    """True when uninstalling may go ahead. `ask(gate)` shows the prompt and returns its answer."""
+    """True when uninstalling may go ahead. `ask(user_gate)` shows one prompt and returns its answer;
+    it is called once per protected user and every one must succeed."""
     gate = UninstallGate(candidate_dirs(data_dir()))
     try:
         if not gate.protected:
             return True
-        allowed = ask(gate)
-        gate.record("uninstall_allowed" if allowed else "uninstall_refused")
-        return allowed
+        for user in gate.users:
+            if not ask(user):
+                gate.record("uninstall_refused", f"password for {user.owner} not confirmed")
+                return False
+        gate.record("uninstall_allowed", f"{len(gate.users)} user(s) confirmed")
+        return True
     finally:
         gate.close()

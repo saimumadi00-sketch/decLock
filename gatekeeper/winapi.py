@@ -17,6 +17,36 @@ def idle_seconds() -> float:
     return ((ticks - info.dwTime) & 0xFFFFFFFF) / 1000.0  # mask handles the 49-day tick wrap
 
 
+def session_locked() -> bool:
+    """Is this Windows session locked (lock screen showing)?
+
+    Asks Remote Desktop Services for the session's lock flag (WTSSessionInfoEx). Unlike checking
+    whether the input desktop is reachable, this is NOT fooled by a UAC prompt or the Ctrl+Alt+Del
+    screen, which would otherwise re-lock open apps every time an admin prompt appears.
+    Returns False when the answer is unavailable (other systems, or the call fails), so a failure
+    only means "no re-lock on Windows lock"; the idle re-lock still works."""
+    try:
+        wtsapi32 = ctypes.windll.wtsapi32
+    except (AttributeError, OSError):
+        return False
+    buffer, size = ctypes.c_void_p(), wintypes.DWORD()
+    # (server = WTS_CURRENT_SERVER_HANDLE, session = WTS_CURRENT_SESSION, class 25 = WTSSessionInfoEx)
+    wtsapi32.WTSQuerySessionInformationW.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.c_int,
+                                                    ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.DWORD)]
+    if not wtsapi32.WTSQuerySessionInformationW(None, 0xFFFFFFFF, 25, ctypes.byref(buffer), ctypes.byref(size)):
+        return False
+    try:
+        if size.value < 20:
+            return False
+        # WTSINFOEXW: DWORD Level; then (8-byte aligned) WTSINFOEX_LEVEL1_W: ULONG SessionId,
+        # WTS_CONNECTSTATE_CLASS SessionState, LONG SessionFlags -> SessionFlags sits at byte 16.
+        level = ctypes.c_uint32.from_address(buffer.value).value
+        flags = ctypes.c_int32.from_address(buffer.value + 16).value
+        return level == 1 and flags == 0  # WTS_SESSIONSTATE_LOCK = 0, UNLOCK = 1, UNKNOWN = -1
+    finally:
+        wtsapi32.WTSFreeMemory(buffer)
+
+
 def lock_workstation() -> bool:
     """Locks the Windows session (unlock = the Windows account password, not Gatekeeper's)."""
     return bool(ctypes.windll.user32.LockWorkStation())

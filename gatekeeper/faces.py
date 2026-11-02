@@ -53,22 +53,36 @@ class Face:
 
 def models_dir() -> Path:
     """Where the .onnx files live: $GATEKEEPER_MODELS, the PyInstaller bundle, or ../models."""
+    if getattr(sys, "frozen", False):
+        # The installed build only uses its own bundled copies (under Program Files, which a standard
+        # user can't change). $GATEKEEPER_MODELS is ignored there: it would let anyone point the face
+        # pipeline at a folder they control.
+        return Path(sys._MEIPASS) / "models"  # unpacked PyInstaller bundle
     env = os.environ.get("GATEKEEPER_MODELS")
     if env:
-        return Path(env)  # safe to override: the files are still hash-checked
-    if getattr(sys, "frozen", False):
-        return Path(sys._MEIPASS) / "models"  # unpacked PyInstaller bundle
+        return Path(env)  # development only; the files are still hash-checked
     return Path(__file__).resolve().parent.parent / "models"
 
 
-def verified_model(name: str) -> str:
-    """Path of a model file after checking it against its pinned SHA-256."""
+def verified_model_bytes(name: str) -> bytes:
+    """A model file's contents, after checking them against the pinned SHA-256.
+
+    The model is then built from THESE bytes, never by opening the file again: checking a file
+    and later loading it by path would let someone swap it in between."""
     path = models_dir() / name
     if not path.is_file():
         raise ModelError(f"Missing model file: {path}")
-    if hashlib.sha256(path.read_bytes()).hexdigest() != MODEL_HASHES[name]:
+    data = path.read_bytes()
+    if hashlib.sha256(data).hexdigest() != MODEL_HASHES[name]:
         raise ModelError(f"{name} does not match its pinned SHA-256; refusing to load it.")
-    return str(path)
+    return data
+
+
+def verified_model(name: str) -> str:
+    """Path of a model file whose contents match the pinned SHA-256 (kept for callers that need a path;
+    the face pipeline itself loads from verified_model_bytes)."""
+    verified_model_bytes(name)
+    return str(models_dir() / name)
 
 
 def similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -91,7 +105,7 @@ def _session(name: str):
     options = ort.SessionOptions()
     options.intra_op_num_threads = 2       # leave CPU for the app being unlocked
     options.log_severity_level = 3         # errors only
-    return ort.InferenceSession(verified_model(name), options, providers=["CPUExecutionProvider"])
+    return ort.InferenceSession(verified_model_bytes(name), options, providers=["CPUExecutionProvider"])
 
 
 def spoof_crop(frame, box, scale: float, size: int = SPOOF_SIZE):
