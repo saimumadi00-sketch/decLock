@@ -41,7 +41,7 @@ class World:
         self.now, self.wall = 100.0, 1_000_000.0
 
     def make(self):
-        return Watchdog(lambda: list(self.sessions), self.dirs.get, lambda s: self.guards.get(s, []),
+        return Watchdog(lambda: list(self.sessions), self.dirs.get, lambda s, d=None: self.guards.get(s, []),
                         self.launch, self.resumed.append, lambda: list(self.dirs.values()), self.usb,
                         clock=lambda: self.now, wall=lambda: self.wall)
 

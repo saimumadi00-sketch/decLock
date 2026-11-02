@@ -285,6 +285,12 @@ class Dashboard:
     def _show_setup_blocked(self) -> None:
         self.authed = False
         self.ctx.audit.record("setup_blocked", "first-run setup refused: this user was set up before")
+        if self.managed and not self.ctx.dev:
+            # Fail closed: this user's data (password, locked apps) is gone, so nothing can be
+            # guarded. Lock Windows and keep the alarm in view instead of quietly protecting nothing.
+            self.ctx.audit.record("tamper_detected", "data folder missing or emptied; Windows locked")
+            self.root.after(500, self.show_window)
+            self.root.after(800, winapi.lock_workstation)
         body = self._centered_card()
         ttk.Label(body, text="Setup is locked", style="CardTitle.TLabel").pack(anchor="w", pady=(4, 6))
         ttk.Label(body, text=BLOCKED_MESSAGE, style="CardMuted.TLabel", wraplength=340,

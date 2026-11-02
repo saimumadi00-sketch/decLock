@@ -229,25 +229,50 @@ class FolderLocker:
         (self.backend.lock if lock else self.backend.unlock)(path)
 
 
-def release_everywhere(dirs, backend=None) -> int:
-    """Uninstaller: unlock every folder any user locked (runs as Administrator)."""
+def _locked_folder_setting(directory: Path):
+    """The raw locked-folder setting of one user, or None if their database can't be read.
+    Read-only first; only if that fails, the normal read-write open the uninstaller used to do."""
+    import sqlite3
+
     from .db import Database
+    from .watchdog import read_settings
+    found = read_settings(directory, [SETTING], strict=True)
+    if found is not None:
+        return found.get(SETTING, "[]")
+    try:
+        db = Database(directory / "gatekeeper.db")
+    except sqlite3.Error as exc:
+        log.error("cannot open %s: %s", directory, exc)
+        return None
+    try:
+        return db.get_setting(SETTING, "[]")
+    except sqlite3.Error as exc:
+        log.error("cannot read %s: %s", directory, exc)
+        return None
+    finally:
+        db.close()
+
+
+def release_everywhere(dirs, backend=None, failed=None) -> int:
+    """Uninstaller: unlock every folder any user locked (runs as Administrator). Folders of users
+    whose database can't be read are added to `failed` (if given) so the caller can report them."""
     backend = backend or IcaclsBackend()
     released = 0
     for d in dirs:
-        db = Database(Path(d) / "gatekeeper.db")
+        raw = _locked_folder_setting(Path(d))
+        if raw is None:
+            if failed is not None:
+                failed.append(str(d))
+            continue
         try:
-            try:
-                items = json.loads(db.get_setting(SETTING, "[]"))
-            except (TypeError, ValueError):
-                items = []
-            for item in items:
-                if isinstance(item, dict) and item.get("path") and os.path.isdir(item["path"]):
-                    try:
-                        backend.unlock(item["path"])
-                        released += 1
-                    except OSError as exc:
-                        log.warning("could not unlock %s: %s", item["path"], exc)
-        finally:
-            db.close()
+            items = json.loads(raw)
+        except (TypeError, ValueError):
+            items = []
+        for item in items if isinstance(items, list) else []:
+            if isinstance(item, dict) and item.get("path") and os.path.isdir(item["path"]):
+                try:
+                    backend.unlock(item["path"])
+                    released += 1
+                except OSError as exc:
+                    log.warning("could not unlock %s: %s", item["path"], exc)
     return released

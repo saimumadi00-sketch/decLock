@@ -95,9 +95,26 @@ def virtual_screen() -> tuple:
         return 0, 0, 1280, 720
 
 
+_USER32 = None
+
+
+def _user32():
+    """A private user32 handle with the window calls declared (HWNDs are pointer-sized)."""
+    global _USER32
+    if _USER32 is None:
+        u = ctypes.WinDLL("user32")
+        u.GetAncestor.argtypes, u.GetAncestor.restype = [wintypes.HWND, wintypes.UINT], wintypes.HWND
+        u.SetForegroundWindow.argtypes, u.SetForegroundWindow.restype = [wintypes.HWND], wintypes.BOOL
+        u.GetWindowLongW.argtypes, u.GetWindowLongW.restype = [wintypes.HWND, ctypes.c_int], wintypes.LONG
+        u.SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.LONG]
+        u.SetWindowLongW.restype = wintypes.LONG
+        _USER32 = u
+    return _USER32
+
+
 def _top_level(widget_id: int) -> int:
     """Tk's winfo_id() is an inner child window; Win32 calls need the real top-level window."""
-    return ctypes.windll.user32.GetAncestor(widget_id, 2) or widget_id         # GA_ROOT
+    return _user32().GetAncestor(widget_id, 2) or widget_id                    # GA_ROOT
 
 
 def force_foreground(widget_id: int) -> None:
@@ -107,7 +124,7 @@ def force_foreground(widget_id: int) -> None:
         user32 = ctypes.windll.user32
         user32.keybd_event(0x12, 0, 0, 0)  # VK_MENU (Alt) down
         user32.keybd_event(0x12, 0, 2, 0)  # Alt up (KEYEVENTF_KEYUP)
-        user32.SetForegroundWindow(_top_level(widget_id))
+        _user32().SetForegroundWindow(_top_level(widget_id))
     except Exception:
         pass
 
@@ -115,7 +132,7 @@ def force_foreground(widget_id: int) -> None:
 def make_click_through(widget_id: int) -> None:
     """Let mouse clicks fall through a (fading) window to whatever is underneath."""
     try:
-        user32 = ctypes.windll.user32
+        user32 = _user32()
         hwnd = _top_level(widget_id)
         style = user32.GetWindowLongW(hwnd, -20)                                # GWL_EXSTYLE
         user32.SetWindowLongW(hwnd, -20, style | 0x80000 | 0x20)               # LAYERED | TRANSPARENT

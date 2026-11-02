@@ -158,7 +158,11 @@ def ctx(tmp_path):
     c.db.close()
 
 
-def test_build_face_unlock_is_none_without_enrolment_or_when_disabled(ctx):
+def test_build_face_unlock_is_none_without_enrolment_or_when_disabled(ctx, monkeypatch):
+    # No software cameras: on a PC with e.g. OBS Virtual Camera installed, face unlock is (rightly)
+    # refused, which would hide what this test checks. That refusal has its own test (test_medium_fixes).
+    from gatekeeper import matcher
+    monkeypatch.setattr(matcher, "software_cameras", lambda: [])
     assert build_face_unlock(ctx, Person) is None
     FaceStore(ctx.db, ctx.keys).replace_all([(OWNER, None)])
     assert build_face_unlock(ctx, Person) is not None
