@@ -61,6 +61,11 @@ locked; lock a folder inside them instead.
 - The activity log is checkpointed about once an hour into the add-only ProgramData folder. Rewriting
   or deleting checkpointed entries fails the log check, even if every hash is recomputed. The only
   way around it is to fake a "log reset", and resets can never be removed afterwards.
+- `gatekeeper release` in the installed build always asks for the password and refuses `--data-dir`
+  (only the elevated uninstaller skips the question).
+- Enrolment markers and log checkpoints only count when the user they name created them (Windows file
+  owner), so another user can't block your setup, cause false alarms, or silence the log check with a
+  forged reset. A reset dated in the future is reported as tampering.
 - The installed build ignores `GATEKEEPER_DATA_DIR`, so a planted environment variable cannot move the guard
   onto an empty folder (it is logged as `env_ignored`). Only `--data-dir` in the startup shortcut can.
 - Every blocked/denied/unlocked event is logged in a hash-chained audit log that is verified at startup
@@ -73,6 +78,14 @@ boot. It restarts each signed-in user's Gatekeeper (only for users who set it up
 was suspended, and puts the USB block back if a user wants it and it was turned off. It only ever
 blocks USB; allowing still needs an administrator. An administrator can stop or delete the task.
 Its log is `C:\ProgramData\Gatekeeper\watchdog.log`.
+
+The watchdog only counts a real guard: the installed `gatekeeperw.exe` started with the guard command
+line for that user's own data folder. Other uses of the same program (face test, the uninstall prompt,
+a copy pointed at another folder) don't count. A user is kept protected if their database holds a
+password *or* their enrolment marker exists, so renaming or deleting the data folder doesn't stop the
+restarts. A guard started with its data missing locks Windows and shows the alarm. If five launches in a
+row never leave a guard running (for example, its lock file or database was made unusable), the watchdog
+fails closed and disconnects the session; the user signs back in with their Windows password.
 
 ## Supply chain
 

@@ -508,7 +508,13 @@ class SingleInstance:
         """Try to take the lock, retrying for up to `wait` seconds. True on success."""
         deadline = time.monotonic() + wait
         while True:
-            fh = open(self.path, "a+")
+            try:
+                fh = open(self.path, "a+")
+            except OSError:  # opened elsewhere without sharing: held, same as a lock
+                if time.monotonic() >= deadline:
+                    return False
+                time.sleep(0.25)
+                continue
             try:
                 if os.name == "nt":
                     import msvcrt

@@ -16,19 +16,34 @@ class _Blob(Structure):
     _fields_ = [("cbData", wintypes.DWORD), ("pbData", POINTER(c_char))]
 
 
+CRYPTPROTECT_UI_FORBIDDEN = 0x1  # fail instead of ever showing a DPAPI prompt (no one may be there)
+_DLLS = {}
+
+
+def _dlls():
+    """Private crypt32/kernel32 handles with the calls declared. Declaring them on the shared
+    ctypes.windll objects (as before) changed LocalFree's prototype for every module in the process."""
+    if not _DLLS:
+        crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        for fn in (crypt32.CryptProtectData, crypt32.CryptUnprotectData):
+            fn.argtypes = [POINTER(_Blob), c_void_p, c_void_p, c_void_p, c_void_p, wintypes.DWORD, POINTER(_Blob)]
+            fn.restype = wintypes.BOOL
+        kernel32.LocalFree.argtypes, kernel32.LocalFree.restype = [c_void_p], c_void_p
+        _DLLS.update(crypt32=crypt32, kernel32=kernel32)
+    return _DLLS["crypt32"], _DLLS["kernel32"]
+
+
 def _dpapi(data: bytes, protect: bool) -> bytes:
     """Encrypt (protect=True) or decrypt bytes with DPAPI, tied to the current Windows user."""
-    crypt32, kernel32 = ctypes.windll.crypt32, ctypes.windll.kernel32
-    kernel32.LocalFree.argtypes = [c_void_p]
-    kernel32.LocalFree.restype = c_void_p
+    crypt32, kernel32 = _dlls()
     buf = create_string_buffer(data, len(data))
     blob_in = _Blob(len(data), cast(buf, POINTER(c_char)))
     blob_out = _Blob()
     fn = crypt32.CryptProtectData if protect else crypt32.CryptUnprotectData
     # (input, description, extra entropy, reserved, prompt struct, flags, output)
-    args = (byref(blob_in), None, None, None, None, 0, byref(blob_out))
-    if not fn(*args):
-        raise ctypes.WinError()
+    if not fn(byref(blob_in), None, None, None, None, CRYPTPROTECT_UI_FORBIDDEN, byref(blob_out)):
+        raise ctypes.WinError(ctypes.get_last_error())
     try:
         return ctypes.string_at(blob_out.pbData, blob_out.cbData)
     finally:

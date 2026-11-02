@@ -6,7 +6,9 @@ and goes through the same db/auth/audit objects as the desktop app, so both alwa
 
 import argparse
 import getpass
+import os
 import sys
+import time
 
 from . import auth
 from .app import open_context, run_guard
@@ -229,10 +231,20 @@ def cmd_release(ctx, args) -> int:
     While a guard IS running, a frozen app is waiting at its unlock prompt; resuming it then would
     skip the password, so that case needs the password.
     """
+    from . import winapi
     from .guard import release_suspended
+    installed, admin = bool(getattr(sys, "frozen", False)), winapi.is_admin()
+    # The lock below is per data folder, so a copy of the database in another folder would look
+    # like "no guard running" and skip the password. The installed build therefore refuses
+    # --data-dir here and always asks (the elevated uninstaller is the one exception).
+    if installed and args.data_dir and not admin:
+        print("release does not accept --data-dir in the installed build.")
+        return 1
     lock = SingleInstance(ctx.directory)
     guard_running = not lock.acquire()
-    if guard_running and not _require_auth(ctx):
+    needs_password = guard_running or (installed and not admin and auth.has_password(ctx.db))
+    if needs_password and not _require_auth(ctx):
+        lock.release()
         return 1
     try:
         print(f"Resumed {release_suspended(ctx)} frozen process(es).")
@@ -285,8 +297,20 @@ def cmd_gui(ctx, args) -> int:
     lock = SingleInstance(ctx.directory)
     # An elevated relaunch starts while the old copy is still shutting down, so wait a moment.
     if not lock.acquire(wait=6):
+        installed = _installed_guard(args)
+        outcome = claim_guard_slot(lock, lambda: older_guards(ctx.directory)) if installed else "exit"
+        if outcome == "lockless":
+            ctx.audit.record("lock_squatted", "the single-instance lock is held by something that is not "
+                                              "Gatekeeper; guarding without it")
+            return _run_gui(ctx, args, run_dashboard, lock)
+        if outcome == "lock":
+            return _run_gui(ctx, args, run_dashboard, lock)
         message = "Gatekeeper is already running. Look for it in your taskbar."
         print(message)
+        if installed:
+            # No blocking dialog here: a copy left waiting on a message box would look like a
+            # running guard to the watchdog while the real one is gone.
+            return 1
         try:  # the windowed build has no console, so say it in a dialog too
             import tkinter as tk
             from tkinter import messagebox
@@ -297,6 +321,56 @@ def cmd_gui(ctx, args) -> int:
         except Exception:
             pass
         return 1
+    return _run_gui(ctx, args, run_dashboard, lock)
+
+
+def _installed_guard(args) -> bool:
+    return bool(getattr(sys, "frozen", False)) and bool(args.service)
+
+
+def claim_guard_slot(lock, older_guards, linger: float = 4.0, poll: float = 0.5,
+                     clock=time.monotonic, sleep=time.sleep) -> str:
+    """Installed build, after the single-instance lock could not be taken. Returns:
+
+      "lock"      the lock came free (the old copy finished shutting down): guard normally
+      "lockless"  nothing that is really Gatekeeper is older than us, so whatever holds the lock is
+                  not a guard (the lock was squatted): guard anyway, without it
+      "exit"      a real, older guard is running: leave within `linger` seconds, never linger longer
+    """
+    deadline = clock() + linger
+    while True:
+        if lock.acquire():
+            return "lock"
+        if not older_guards():
+            return "lockless"
+        if clock() >= deadline:
+            return "exit"
+        sleep(poll)
+
+
+def older_guards(directory) -> list:
+    """PIDs of real guards for `directory` in this session that started before this process."""
+    import psutil
+
+    from .watchdog import guards_in, session_of
+    me = psutil.Process()
+    mine = (me.create_time(), me.pid)
+    session = session_of(os.getpid())
+    if session is None:
+        return []
+    found = []
+    for pid, _suspended in guards_in(session, directory):
+        if pid == me.pid:
+            continue
+        try:
+            if (psutil.Process(pid).create_time(), pid) < mine:
+                found.append(pid)
+        except psutil.Error:
+            continue
+    return found
+
+
+def _run_gui(ctx, args, run_dashboard, lock) -> int:
     # The arguments an elevated copy of this exact instance would need (see winapi.relaunch_elevated).
     relaunch = ((["--dev"] if ctx.dev else []) + (["--service"] if args.service else [])
                 + ["--data-dir", str(ctx.directory), "gui"])
@@ -333,7 +407,20 @@ def confirm_uninstall_main() -> int:
     """Run by the uninstaller before it removes anything. Exit code 0 = go ahead, 1 = refused.
     Handled before open_context, so it never creates a data folder in the admin's profile."""
     from .uninstall import confirm_uninstall
-    return 0 if confirm_uninstall(_ask_uninstall) else 1
+    return 0 if confirm_uninstall(_ask_uninstall, warn=_warn_uninstall) else 1
+
+
+def _warn_uninstall(message: str) -> None:
+    """Tell the administrator why the uninstall was refused (the windowed build has no console)."""
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror("Gatekeeper", message)
+        root.destroy()
+    except Exception:
+        print(message, file=sys.stderr)
 
 
 def release_folders_main() -> int:
@@ -347,8 +434,14 @@ def release_folders_main() -> int:
     from .config import data_dir
     from .folders import release_everywhere
     from .uninstall import candidate_dirs
-    released = release_everywhere(candidate_dirs(data_dir()))
+    failed = []
+    released = release_everywhere(candidate_dirs(data_dir()), failed=failed)
     print(f"Unlocked {released} folder(s).")
+    if failed:
+        # Their folders may still be locked; say where, so an administrator can unlock them by hand
+        # (icacls "<folder>" /remove:d *S-1-1-0, see folders.py).
+        print("Could not read the Gatekeeper data in: " + "; ".join(failed), file=sys.stderr)
+        return 1
     return 0
 
 

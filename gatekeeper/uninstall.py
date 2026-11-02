@@ -10,7 +10,9 @@ set up their own Gatekeeper, then use that password to remove everyone's protect
 If nobody set a password, there is nothing to protect and uninstall is allowed.
 """
 
+import logging
 import os
+import sqlite3
 from pathlib import Path
 
 from . import auth
@@ -19,6 +21,7 @@ from .config import APP_NAME, data_dir
 from .db import Database
 
 DB_NAME = "gatekeeper.db"
+log = logging.getLogger("gatekeeper.uninstall")
 
 
 def candidate_dirs(own: Path = None, users_root: Path = None) -> list:
@@ -63,12 +66,30 @@ class UninstallGate:
     """Every protected Gatekeeper install found on this PC."""
 
     def __init__(self, dirs):
-        self.users = []  # UserGate for each folder whose owner set a password
+        self.users = []       # UserGate for each folder whose owner set a password
+        self.unreadable = []  # owners whose database couldn't be read: uninstall must not go ahead
         self._open = []
+        from .watchdog import read_settings
         for d in dirs:
-            db = Database(d / DB_NAME)
+            # Elevated code touching other users' files: look read-only first, and only open
+            # (read-write, for the shared lockout and the log) the databases of protected users.
+            found = read_settings(d, ["password_hash"], strict=True)
+            if found is not None and "password_hash" not in found:
+                continue  # readable, and no password: nothing to protect
+            try:
+                db = Database(d / DB_NAME)
+            except sqlite3.Error as exc:
+                log.error("cannot open %s: %s", d / DB_NAME, exc)
+                self.unreadable.append(_owner(d))
+                continue
             self._open.append(db)
-            if auth.has_password(db):
+            try:
+                has = auth.has_password(db)
+            except sqlite3.Error as exc:
+                log.error("cannot read %s: %s", d / DB_NAME, exc)
+                self.unreadable.append(_owner(d))
+                continue
+            if has:
                 self.users.append(UserGate(_owner(d), db, AuditLog(db, d / "audit.head")))
 
     @property
@@ -84,11 +105,25 @@ class UninstallGate:
             db.close()
 
 
-def confirm_uninstall(ask) -> bool:
+UNREADABLE_MESSAGE = ("Gatekeeper was not uninstalled: the Gatekeeper data of {owners} could not be read "
+                      "(it is in use or damaged), so their password can't be checked.\n\n"
+                      "Sign that user out and try again. If the file is damaged, an administrator can "
+                      "rename that user's %APPDATA%\\Gatekeeper\\gatekeeper.db first.")
+
+
+def confirm_uninstall(ask, warn=None) -> bool:
     """True when uninstalling may go ahead. `ask(user_gate)` shows one prompt and returns its answer;
-    it is called once per protected user and every one must succeed."""
+    it is called once per protected user and every one must succeed. A database that can't be read
+    refuses the uninstall (fail closed); `warn(message)` tells the administrator why."""
     gate = UninstallGate(candidate_dirs(data_dir()))
     try:
+        if gate.unreadable:
+            owners = ", ".join(gate.unreadable)
+            log.error("uninstall refused: unreadable data for %s", owners)
+            gate.record("uninstall_refused", f"unreadable data for {owners}")
+            if warn is not None:
+                warn(UNREADABLE_MESSAGE.format(owners=owners))
+            return False
         if not gate.protected:
             return True
         for user in gate.users:

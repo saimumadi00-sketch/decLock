@@ -23,3 +23,6 @@ audit-before-reset.csv
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# pytest temp folder used when %TEMP% is inside AppData (see tests/conftest.py)
+.pytest_tmp/

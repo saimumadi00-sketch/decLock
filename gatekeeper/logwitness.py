@@ -20,6 +20,7 @@ Only active in the installed build, like the enrolment markers.
 import logging
 import os
 import time
+import uuid
 from datetime import datetime
 
 log = logging.getLogger("gatekeeper.logwitness")
@@ -27,6 +28,7 @@ log = logging.getLogger("gatekeeper.logwitness")
 INTERVAL = 3600       # seconds between checkpoints
 PRUNE_SLACK = 86400   # a day of grace around the retention cutoff
 CACHE_SECONDS = 60    # the dashboard verifies every few seconds; re-read the folder at most this often
+FUTURE_SLACK = 300    # a reset dated more than this far ahead of now was not made by Gatekeeper
 
 
 def _epoch(iso: str) -> float:
@@ -57,12 +59,17 @@ class LogWitness:
             if not name.startswith(prefix):
                 continue
             kind, _, rest = name[len(prefix):].partition(".")
+            if kind not in ("log", "reset"):
+                continue
+            path = self.enrolment.folder / name
+            if not self.enrolment.trusted(path):
+                continue  # added by another user: it says nothing about this user's log
             try:
                 if kind == "log":
-                    digest, ts = (self.enrolment.folder / name).read_text(encoding="ascii").split()
-                    checkpoints.append((int(rest), digest, float(ts)))
-                elif kind == "reset":
-                    resets.append(float(rest))
+                    digest, ts = path.read_text(encoding="ascii").split()
+                    checkpoints.append((int(rest.split(".")[0]), digest, float(ts)))
+                else:
+                    resets.append(float(rest.split(".")[0]))
             except (OSError, ValueError):
                 continue  # unreadable or junk: ignore (it can't make a clean log look tampered)
         return checkpoints, resets
@@ -84,12 +91,17 @@ class LogWitness:
                 row = db.conn.execute("SELECT id, ts, hash FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()
             if row is None:
                 return False
-            self._add(f"log.{row['id']}", f"{row['hash']} {_epoch(row['ts']):.0f}")
+            text = f"{row['hash']} {_epoch(row['ts']):.0f}"
+            try:
+                self._add(f"log.{row['id']}", text)
+            except FileExistsError:
+                if self.enrolment.trusted(self.enrolment.folder / f"{self.enrolment.sid}.log.{row['id']}"):
+                    self._last_written = self.clock()  # that entry is already checkpointed
+                    return False
+                # Someone else created that name first; write ours under a name they can't guess.
+                self._add(f"log.{row['id']}.{uuid.uuid4().hex}", text)
             self._last_written = self.clock()
             return True
-        except FileExistsError:
-            self._last_written = self.clock()  # that entry is already checkpointed
-            return False
         except Exception:
             log.warning("could not write a log checkpoint", exc_info=True)
             return False
@@ -132,6 +144,10 @@ class LogWitness:
 
     def _verify(self, db, now):
         checkpoints, resets = self._files()
+        if any(r > now + FUTURE_SLACK for r in resets):
+            # A reset "from the future" would make every checkpoint, including later ones, count as
+            # older than the reset and be ignored forever. Gatekeeper never writes one.
+            return False, "a log reset is dated in the future"
         last_reset = max(resets, default=0.0)
         retention = int(db.get_setting("log_retention_days", 90) or 0)
         for entry_id, digest, ts in sorted(checkpoints):
